@@ -270,8 +270,6 @@ details[open] summary::before { transform: rotate(90deg); }
   font-size: 10.5px; color: var(--muted); background: var(--green-tint);
   border: 1px solid #e2f2e9; border-radius: 999px; padding: 1px 8px; white-space: nowrap;
 }
-.modal p.hint code { padding: 1px 7px; font-size: 11.5px; white-space: nowrap; }
-
 /* ---------- 通知 ---------- */
 .toast { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 90; }
 .toast div {
@@ -432,7 +430,6 @@ details[open] summary::before { transform: rotate(90deg); }
 <div id="modal-catalog" class="overlay hidden">
   <div class="modal modal-wide">
     <h3>模型目錄</h3>
-    <p class="hint">清單來自 miniapps.ai 的 <code>/ai-models</code>，按「加入」就會寫進 <code>config.json</code>，之後用該名稱呼叫 <code>/v1</code> 即可。</p>
 
     <div class="row" style="margin-top:16px">
       <input id="cat-search" class="grow" type="text" placeholder="搜尋名稱、nativeId 或平台">
