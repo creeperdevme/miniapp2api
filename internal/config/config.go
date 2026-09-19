@@ -37,6 +37,9 @@ const (
 	DefaultHost    = "127.0.0.1"
 	DefaultPort    = 8787
 	DefaultTimeout = 180
+
+	// DefaultToolID 是所有模型共用的 MiniApp ID，寫死在程式裡不開放設定。
+	DefaultToolID = "a109c325-fe40-4f50-a815-1bfac2ddb7bb"
 )
 
 var (
@@ -48,27 +51,29 @@ var (
 	ErrModelExists = errors.New("模型已經存在")
 	// ErrModelNotFound 表示找不到指定的模型。
 	ErrModelNotFound = errors.New("找不到模型")
-	// ErrLastModel 表示移除後會沒有任何模型可用。
-	ErrLastModel = errors.New("至少要保留一個模型")
 )
 
 // Model 是一個可被 /v1/models 列出的上游模型設定。
+//
+// 上游的 toolId 由 DefaultToolID 統一決定，不存放在設定檔裡。
 type Model struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	ToolID   string `json:"tool_id"`
 	ModelID  string `json:"model_id"`
 	Revision int    `json:"revision"`
 	Language string `json:"language"`
+
+	// ToolID 一律由 normalize 填入 DefaultToolID，不會寫進 config.json。
+	ToolID string `json:"-"`
 }
 
 // normalize 補上模型的預設值。
 func (m *Model) normalize() {
 	m.ID = strings.TrimSpace(m.ID)
 	m.Name = strings.TrimSpace(m.Name)
-	m.ToolID = strings.TrimSpace(m.ToolID)
 	m.ModelID = strings.TrimSpace(m.ModelID)
 	m.Language = strings.TrimSpace(m.Language)
+	m.ToolID = DefaultToolID
 	if m.Revision <= 0 {
 		m.Revision = 1
 	}
@@ -87,50 +92,10 @@ func (m Model) validate() error {
 		return errors.New("模型名稱不可為空")
 	case strings.ContainsAny(m.ID, " \t\r\n"):
 		return fmt.Errorf("模型名稱不可包含空白：%q", m.ID)
-	case m.ToolID == "":
-		return fmt.Errorf("模型 %s 缺少 toolId", m.ID)
 	case m.ModelID == "":
 		return fmt.Errorf("模型 %s 缺少 modelId", m.ID)
 	}
 	return nil
-}
-
-// DefaultModels 回傳內建的上游模型設定。
-func DefaultModels() []Model {
-	return []Model{
-		{
-			ID:       "gpt-6-astra",
-			Name:     "GPT 6 Astra",
-			ToolID:   "a109c325-fe40-4f50-a815-1bfac2ddb7bb",
-			ModelID:  "f57145fe-a761-4ac4-9cc5-676ac291c433",
-			Revision: 1,
-			Language: "zh",
-		},
-		{
-			ID:       "gpt-5.6-sol",
-			Name:     "GPT 5.6 Sol",
-			ToolID:   "fa33c283-edd6-4078-a449-00718cf1a0ea",
-			ModelID:  "39063b37-87a5-43d7-ae43-298bba9181fb",
-			Revision: 1,
-			Language: "zh",
-		},
-		{
-			ID:       "gpt-5.6-terra",
-			Name:     "GPT 5.6 Terra",
-			ToolID:   "71de5561-c814-495a-b8a1-c13da3f1791b",
-			ModelID:  "80f411fd-e28a-4f01-a977-e809757e7009",
-			Revision: 1,
-			Language: "zh",
-		},
-		{
-			ID:       "gpt-5.6-luna",
-			Name:     "GPT 5.6 Luna",
-			ToolID:   "65afe0d6-4215-4408-8a7d-8f32f9e592a7",
-			ModelID:  "b95a7fe5-fd23-4b72-8c05-aa5ff51df1f1",
-			Revision: 1,
-			Language: "zh",
-		},
-	}
 }
 
 // Config 是 config.json 的內容。
@@ -143,10 +108,8 @@ type Config struct {
 	Port           int     `json:"port"`
 	RequestTimeout int     `json:"request_timeout_seconds"`
 	Models         []Model `json:"models"`
-	// RemovedModels 記錄被使用者移除的內建模型，避免下次啟動又被自動補回來。
-	RemovedModels []string `json:"removed_models,omitempty"`
-	CreatedAt     string   `json:"created_at"`
-	UpdatedAt     string   `json:"updated_at"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 
 	path string
 	mu   sync.RWMutex
@@ -169,10 +132,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.path = path
-	if merged := cfg.normalize(); merged {
-		// 補上內建模型後順手寫回檔案，讓 config.json 與實際運作一致。
-		_ = cfg.Save()
-	}
+	cfg.normalize()
 	return cfg, nil
 }
 
@@ -183,8 +143,10 @@ func (c *Config) Path() string {
 	return c.path
 }
 
-// normalize 補上缺少的預設值，並回報是否補上了內建模型。
-func (c *Config) normalize() bool {
+// normalize 補上缺少的預設值。
+//
+// 模型預設是空的，一律由使用者從模型目錄加入，程式不會自動塞入任何模型。
+func (c *Config) normalize() {
 	if c.CreatedAt == "" {
 		c.CreatedAt = timestamp()
 	}
@@ -197,9 +159,6 @@ func (c *Config) normalize() bool {
 	if c.RequestTimeout <= 0 {
 		c.RequestTimeout = DefaultTimeout
 	}
-	if len(c.Models) == 0 {
-		c.Models = DefaultModels()
-	}
 	for i := range c.Models {
 		c.Models[i].normalize()
 	}
@@ -207,18 +166,6 @@ func (c *Config) normalize() bool {
 		required := true
 		c.RequireAPIKey = &required
 	}
-
-	// 內建模型若不在設定檔中會自動補上；已存在的設定不會被覆蓋，
-	// 但使用者主動移除過的模型（removed_models）不會再被補回來。
-	merged := false
-	for _, preset := range DefaultModels() {
-		if hasModel(c.Models, preset.ID) || containsID(c.RemovedModels, preset.ID) {
-			continue
-		}
-		c.Models = append(c.Models, preset)
-		merged = true
-	}
-	return merged
 }
 
 func hasModel(models []Model, id string) bool {
@@ -228,29 +175,6 @@ func hasModel(models []Model, id string) bool {
 		}
 	}
 	return false
-}
-
-func containsID(ids []string, id string) bool {
-	for _, item := range ids {
-		if strings.EqualFold(item, id) {
-			return true
-		}
-	}
-	return false
-}
-
-// removeID 移除清單中（忽略大小寫）符合 id 的項目。
-func removeID(ids []string, id string) []string {
-	kept := ids[:0]
-	for _, item := range ids {
-		if !strings.EqualFold(item, id) {
-			kept = append(kept, item)
-		}
-	}
-	if len(kept) == 0 {
-		return nil
-	}
-	return kept
 }
 
 // Save 將設定寫回 config.json。
@@ -467,15 +391,11 @@ func (c *Config) AddModel(model Model) error {
 		return fmt.Errorf("%w：%s", ErrModelExists, model.ID)
 	}
 	c.Models = append(c.Models, model)
-	c.RemovedModels = removeID(c.RemovedModels, model.ID)
 	c.mu.Unlock()
 	return c.Save()
 }
 
 // RemoveModel 移除一個模型設定並寫回 config.json。
-//
-// 內建模型被移除時會記錄在 removed_models，避免下次啟動又被自動補上；
-// 移除最後一個模型會失敗，因為 /v1 至少需要一個上游模型可用。
 func (c *Config) RemoveModel(id string) error {
 	id = strings.TrimSpace(id)
 
@@ -491,16 +411,7 @@ func (c *Config) RemoveModel(id string) error {
 		c.mu.Unlock()
 		return fmt.Errorf("%w：%s", ErrModelNotFound, id)
 	}
-	if len(c.Models) <= 1 {
-		c.mu.Unlock()
-		return ErrLastModel
-	}
-
-	removed := c.Models[index]
 	c.Models = append(c.Models[:index], c.Models[index+1:]...)
-	if hasModel(DefaultModels(), removed.ID) {
-		c.RemovedModels = append(c.RemovedModels, removed.ID)
-	}
 	c.mu.Unlock()
 	return c.Save()
 }

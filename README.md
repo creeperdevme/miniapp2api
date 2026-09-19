@@ -10,6 +10,7 @@
 - 登入後直接進入 **號池** 頁面，右上角有「**＋ 新增帳號**」。
 - 新增帳號只需填 **JWT**、**CSRF_Cookie**、**CSRF_Token**，會存成 `auths/{uuid}.json`。
 - 提供 OpenAI 相容端點：`GET /v1/models`、`POST /v1/chat/completions`（支援 `stream`）。
+- 模型清單預設是空的，從上游的模型目錄（`GET /ai-models`）挑選並加入即可。
 - 自動挑選最少使用的帳號，出錯的帳號會進入冷卻並自動換下一個帳號重試。
 
 ## 快速開始
@@ -45,8 +46,8 @@ go build -o miniapp2api.exe .
    - `CSRF_Cookie`：同處的 `__Host-miniapps.x-csrf-token`
    - `CSRF_Token`：DevTools → Network → 任一 `POST /chat` 請求 → 標頭 `x-csrf-token`
 4. 每張帳號卡片可以 **測試**（只呼叫 `quickAccess`，不消耗 AI 額度）、**編輯**、**停用／啟用**、**刪除**。
-5. 右上角 **設定** 可以管理對外開放的模型：從上游的模型目錄（`GET /ai-models`）挑選並「加入」，
-   或移除不需要的模型；目錄會依 `toolId` 快取 10 分鐘，需要重抓時按「重新抓取」。
+5. 右上角 **設定** 可以管理模型：清單預設是空的，按「＋ 從模型目錄新增」，
+   從上游的 `GET /ai-models` 目錄把模型「加入」或「移除」。目錄會快取 10 分鐘，需要重抓時按「重新抓取」。
 
 密碼與 API 金鑰都可以在右上角 **設定** 中變更。
 
@@ -54,12 +55,14 @@ go build -o miniapp2api.exe .
 
 任何支援 OpenAI 的客戶端都能直接使用，只要把 Base URL 指到 `http://127.0.0.1:8787/v1`。
 
+`model` 請填 **設定** 中已加入的模型名稱（`GET /v1/models` 可列出目前可用的名稱）。
+
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H "Authorization: Bearer sk-m2a-xxxx" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-6-astra",
+    "model": "chat-latest",
     "messages": [{"role": "user", "content": "你好"}]
   }'
 ```
@@ -70,7 +73,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="sk-m2a-xxxx")
 
 response = client.chat.completions.create(
-    model="gpt-6-astra",
+    model="chat-latest",
     messages=[{"role": "user", "content": "你好"}],
 )
 print(response.choices[0].message.content)
@@ -80,20 +83,14 @@ print(response.choices[0].message.content)
 
 ### 模型對應
 
-內建 4 個上游模型，直接用這些名稱呼叫即可（`GET /v1/models` 會列出）：
+**預設沒有任何模型**，第一次使用請先到右上角 **設定** →「＋ 從模型目錄新增」把要用的模型加入。
 
-| 模型名稱 | modelId | toolId |
-| --- | --- | --- |
-| `gpt-6-astra` | `f57145fe-a761-4ac4-9cc5-676ac291c433` | `a109c325-fe40-4f50-a815-1bfac2ddb7bb` |
-| `gpt-5.6-sol` | `39063b37-87a5-43d7-ae43-298bba9181fb` | `fa33c283-edd6-4078-a449-00718cf1a0ea` |
-| `gpt-5.6-terra` | `80f411fd-e28a-4f01-a977-e809757e7009` | `71de5561-c814-495a-b8a1-c13da3f1791b` |
-| `gpt-5.6-luna` | `b95a7fe5-fd23-4b72-8c05-aa5ff51df1f1` | `65afe0d6-4215-4408-8a7d-8f32f9e592a7` |
-
-- 傳入未知的模型名稱（例如 `gpt-4o`）時，會自動使用第一組設定的模型，方便現成客戶端直接接入。
-- 要新增其他模型，打開右上角 **設定** →「＋ 從模型目錄新增」：清單直接來自上游的 `GET /ai-models`，
-  填好 `toolId` 後按「加入」即可。對外名稱預設取上游的 `nativeId`，撞名時會自動加上後綴。
-- 也可以直接編輯 `config.json` 的 `models` 陣列；內建模型若不在設定檔中會自動補上，已有的設定不會被覆蓋。
-- 透過介面移除內建模型時會記在 `removed_models`，重新啟動後不會被自動補回來；至少要保留一個模型。
+- 目錄直接來自上游的 `GET /ai-models`，加入時會自動帶入該模型的 `model_id`（上游的 UUID）。
+- 對外模型名稱預設取上游的 `nativeId`（例如 `chat-latest`），撞名時自動加上變體標籤或序號。
+- 所有模型共用同一個寫死的 `toolId`（程式內的 `config.DefaultToolID`），不需要也不能設定。
+- 傳入未知的模型名稱（例如 `gpt-4o`）時，會自動使用清單中的第一個模型，方便現成客戶端直接接入；
+  清單是空的時候 `POST /v1/chat/completions` 會回 `503 no_model_configured`。
+- 也可以直接編輯 `config.json` 的 `models` 陣列。
 
 ## 檔案說明
 
@@ -110,32 +107,29 @@ print(response.choices[0].message.content)
   "request_timeout_seconds": 180,
   "models": [
     {
-      "id": "gpt-6-astra",
-      "name": "GPT 6 Astra",
-      "tool_id": "a109c325-fe40-4f50-a815-1bfac2ddb7bb",
-      "model_id": "f57145fe-a761-4ac4-9cc5-676ac291c433",
+      "id": "chat-latest",
+      "name": "ChatGPT Latest",
+      "model_id": "3d0b890a-7658-4165-b860-e030b620e3e8",
       "revision": 1,
       "language": "zh"
     },
     {
-      "id": "gpt-5.6-sol",
-      "name": "GPT 5.6 Sol",
-      "tool_id": "fa33c283-edd6-4078-a449-00718cf1a0ea",
-      "model_id": "39063b37-87a5-43d7-ae43-298bba9181fb",
+      "id": "claude-sonnet-4-5",
+      "name": "Claude 4.5 Sonnet",
+      "model_id": "90fda230-de04-4133-8b34-b989d564925e",
       "revision": 1,
       "language": "zh"
     }
-  ],
-  "removed_models": []
+  ]
 }
 ```
 
-`removed_models` 只在使用者從介面移除內建模型時才會有內容，用來避免內建模型被自動補回來。
+`models` 預設是空陣列；`tool_id` 不放在設定檔裡，一律使用程式內寫死的值。
 
 ### `auths/{uuid}.json`
 
 每個帳號一個檔案，內容只有 `jwt`、`csrf_cookie`、`csrf_token`、啟用狀態與使用統計
-（`toolId`／`modelId` 等一律來自 `config.json` 的模型設定，不放在帳號裡）。
+（`modelId` 等一律來自 `config.json` 的模型設定，不放在帳號裡）。
 檔案權限為 `0600`，可自行備份或複製到其他機器。
 
 ## 中轉流程
@@ -156,6 +150,7 @@ print(response.choices[0].message.content)
 | 等待回覆超過 180 秒 | `504 upstream_timeout` |
 | 號池沒有可用帳號（停用或冷卻中） | `503 no_available_account` |
 | API 金鑰錯誤或缺漏 | `401 invalid_api_key` / `missing_api_key` |
+| 尚未加入任何模型 | `503 no_model_configured` |
 
 帳號失效（JWT 過期、CSRF 錯誤）會在網頁上以紅色錯誤訊息顯示，該帳號也會暫時進入冷卻。
 

@@ -90,6 +90,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	model := s.cfg.FindModel(request.Model)
+	if model.ModelID == "" {
+		writeAPIError(w, http.StatusServiceUnavailable,
+			"尚未加入任何模型，請先在網頁介面的「模型」區塊加入模型。",
+			"invalid_request_error", "no_model_configured")
+		return
+	}
 	completionID := "chatcmpl-" + store.RandomHex(12)
 	created := time.Now().Unix()
 

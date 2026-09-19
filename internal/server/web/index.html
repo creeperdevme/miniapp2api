@@ -241,7 +241,7 @@ details[open] summary::before { transform: rotate(90deg); }
 
 /* ---------- 模型 ---------- */
 .modal-wide { max-width: 660px; }
-.model-list { display: flex; flex-direction: column; gap: 8px; }
+.model-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .model-row {
   display: flex; align-items: center; gap: 10px;
   border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px;
@@ -308,7 +308,6 @@ details[open] summary::before { transform: rotate(90deg); }
       <div class="mark">🌿</div>
       <div>
         <strong>miniapp2api</strong>
-        <small><span class="dot" id="health-dot"></span>MiniApps 號池中轉 · OpenAI 相容 API</small>
       </div>
     </div>
     <div class="spacer"></div>
@@ -370,19 +369,12 @@ details[open] summary::before { transform: rotate(90deg); }
 <div id="modal-settings" class="overlay hidden">
   <div class="modal">
     <h3>設定</h3>
-    <p class="hint">號池目錄：<span id="data-dir">-</span></p>
 
-    <label>API 金鑰驗證</label>
     <div class="row">
-      <label style="margin:0;flex:1" for="req-key">呼叫 /v1 時必須帶 API 金鑰</label>
-      <input id="req-key" type="checkbox">
-    </div>
-    <div class="row" style="margin-top:12px">
       <button class="btn btn-sm" id="btn-regen-key">重新產生 API 金鑰</button>
       <button class="btn btn-sm" id="btn-reveal-key">顯示／隱藏金鑰</button>
     </div>
 
-    <label>模型（對外開放的 OpenAI 模型名稱）</label>
     <div id="model-list" class="model-list"></div>
     <div class="row" style="margin-top:12px">
       <button class="btn btn-sm btn-primary" id="btn-model-catalog">＋ 從模型目錄新增</button>
@@ -411,17 +403,10 @@ details[open] summary::before { transform: rotate(90deg); }
     <h3>模型目錄</h3>
     <p class="hint">清單來自 miniapps.ai 的 <code>/ai-models</code>，按「加入」就會寫進 <code>config.json</code>，之後用該名稱呼叫 <code>/v1</code> 即可。</p>
 
-    <label for="cat-tool">toolId（模型所屬的 MiniApp）</label>
-    <div class="row">
-      <input id="cat-tool" class="grow" type="text" list="tool-ids" spellcheck="false" placeholder="a109c325-fe40-4f50-a815-1bfac2ddb7bb">
-      <datalist id="tool-ids"></datalist>
-      <button class="btn btn-sm btn-primary" id="btn-cat-load">載入</button>
-      <button class="btn btn-sm" id="btn-cat-refresh">重新抓取</button>
-    </div>
-
-    <div class="row" style="margin-top:12px">
+    <div class="row" style="margin-top:16px">
       <input id="cat-search" class="grow" type="text" placeholder="搜尋名稱、nativeId 或平台">
       <label class="check-inline" for="cat-all"><input id="cat-all" type="checkbox"> 顯示已下架</label>
+      <button class="btn btn-sm" id="btn-cat-refresh">重新抓取</button>
     </div>
 
     <div class="cat-meta" id="cat-meta"></div>

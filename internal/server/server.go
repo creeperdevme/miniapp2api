@@ -358,15 +358,10 @@ type catalogModel struct {
 
 // handleModelCatalog 讀取上游 /ai-models 的模型目錄（只讀取，不消耗 AI 額度）。
 //
-// 目錄每個 toolId 有三百多筆而且很少變動，因此會快取；
-// 要忽略快取重新抓取時帶上 ?refresh=1。
+// toolId 一律使用寫死的 config.DefaultToolID；目錄有三百多筆而且很少變動，
+// 因此會快取，要忽略快取重新抓取時帶上 ?refresh=1。
 func (s *Server) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
-	toolID := strings.TrimSpace(r.URL.Query().Get("tool_id"))
-	if toolID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 tool_id 參數"})
-		return
-	}
-
+	toolID := config.DefaultToolID
 	models, fromCache := s.catalog.get(toolID)
 	if !fromCache || r.URL.Query().Get("refresh") != "" {
 		fetched, err := s.fetchCatalog(r.Context(), toolID)
@@ -400,10 +395,9 @@ func (s *Server) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"tool_id": toolID,
-		"cached":  fromCache,
-		"total":   len(list),
-		"models":  list,
+		"cached": fromCache,
+		"total":  len(list),
+		"models": list,
 	})
 }
 
@@ -456,12 +450,11 @@ func (s *Server) catalogAccount() (store.Account, bool) {
 	return store.Account{}, false
 }
 
-// handleCreateModel 新增一個模型設定（對外名稱由呼叫方指定）。
+// handleCreateModel 新增一個模型設定（對外名稱由呼叫方指定，toolId 固定）。
 func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
-		ToolID   string `json:"tool_id"`
 		ModelID  string `json:"model_id"`
 		Revision int    `json:"revision"`
 		Language string `json:"language"`
@@ -474,7 +467,6 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 	model := config.Model{
 		ID:       payload.ID,
 		Name:     payload.Name,
-		ToolID:   payload.ToolID,
 		ModelID:  payload.ModelID,
 		Revision: payload.Revision,
 		Language: payload.Language,
@@ -488,7 +480,7 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.log.Printf("已新增模型 %s（toolId %s / modelId %s）", model.ID, model.ToolID, model.ModelID)
+	s.log.Printf("已新增模型 %s（modelId %s）", model.ID, model.ModelID)
 	writeJSON(w, http.StatusOK, s.sessionPayload(true))
 }
 
@@ -498,9 +490,6 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 	switch err := s.cfg.RemoveModel(id); {
 	case errors.Is(err, config.ErrModelNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	case errors.Is(err, config.ErrLastModel):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

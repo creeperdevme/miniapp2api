@@ -7,8 +7,7 @@ const state = {
   timer: null,
   keyVisible: false,
   catalog: [],
-  catalogToolId: '',
-  defaultToolId: '',
+  catalogLoaded: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -123,9 +122,6 @@ function renderSession() {
   const session = state.session || {};
   $('api-base').textContent = session.base_url || '-';
   $('api-key').textContent = maskKey(session.api_key);
-  $('data-dir').textContent = session.data_dir || '-';
-  $('req-key').checked = !!session.require_api_key;
-  $('health-dot').style.background = (session.pool && session.pool.enabled > 0) ? 'var(--ok)' : 'var(--err)';
 
   renderModels();
 }
@@ -308,17 +304,6 @@ $('account-form').addEventListener('submit', async (event) => {
 
 // ---------------------------------------------------------------- 設定
 
-$('req-key').addEventListener('change', async (event) => {
-  try {
-    state.session = await api('/api/settings', { method: 'PUT', body: { require_api_key: event.target.checked } });
-    renderSession();
-    toast('已更新設定', 'ok');
-  } catch (err) {
-    toast(err.message, 'err');
-    renderSession();
-  }
-});
-
 $('btn-regen-key').addEventListener('click', async () => {
   if (!confirm('重新產生後，舊的 API 金鑰會立即失效，確定嗎？')) return;
   try {
@@ -368,10 +353,10 @@ function usedModelIds() {
   return used;
 }
 
-// addedUpstreamIds 回傳已經加入設定的「toolId/modelId」組合。
+// addedUpstreamIds 回傳已經加入設定的上游 modelId。
 function addedUpstreamIds() {
   const added = new Set();
-  for (const model of currentModels()) added.add(`${model.tool_id}/${model.model_id}`);
+  for (const model of currentModels()) added.add(model.model_id);
   return added;
 }
 
@@ -402,41 +387,23 @@ function renderModels() {
       <code>${esc(model.id)}</code>
       <span class="model-name">${esc(model.name || '')}</span>
       <div class="spacer"></div>
-      <button class="btn btn-sm btn-danger" data-action="remove-model" data-id="${esc(model.id)}"${models.length <= 1 ? ' disabled' : ''}>移除</button>
+      <button class="btn btn-sm btn-danger" data-action="remove-model" data-id="${esc(model.id)}">移除</button>
     </div>`).join('');
-
-  const toolIds = new Map();
-  for (const model of models) {
-    if (model.tool_id && !toolIds.has(model.tool_id)) toolIds.set(model.tool_id, model.name || model.id);
-  }
-  $('tool-ids').innerHTML = [...toolIds]
-    .map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`)
-    .join('');
-  if (!state.defaultToolId) state.defaultToolId = models[0].tool_id || '';
 }
 
 function openCatalogModal() {
-  if (!$('cat-tool').value) $('cat-tool').value = state.defaultToolId || '';
   $('modal-catalog').classList.remove('hidden');
-  if (state.catalogToolId !== $('cat-tool').value.trim()) loadCatalog(false);
+  if (!state.catalogLoaded) loadCatalog(false);
 }
 
 async function loadCatalog(refresh) {
-  const toolId = $('cat-tool').value.trim();
-  if (!toolId) {
-    toast('請先填寫 toolId', 'err');
-    $('cat-tool').focus();
-    return;
-  }
-
-  state.catalogToolId = toolId;
   state.catalog = [];
   $('cat-meta').textContent = '載入中…';
   $('cat-list').innerHTML = '';
   try {
-    const query = `tool_id=${encodeURIComponent(toolId)}${refresh ? '&refresh=1' : ''}`;
-    const data = await api('/api/models/catalog?' + query);
+    const data = await api('/api/models/catalog' + (refresh ? '?refresh=1' : ''));
     state.catalog = data.models || [];
+    state.catalogLoaded = true;
     renderCatalog();
   } catch (err) {
     $('cat-meta').textContent = '';
@@ -450,7 +417,6 @@ function renderCatalog() {
   const showAll = $('cat-all').checked;
   const used = usedModelIds();
   const added = addedUpstreamIds();
-  const toolId = state.catalogToolId;
 
   const items = catalog.filter((item) => {
     if (!showAll && !item.available) return false;
@@ -465,7 +431,7 @@ function renderCatalog() {
   }
 
   $('cat-list').innerHTML = items.map((item) => {
-    const already = added.has(`${toolId}/${item.id}`);
+    const already = added.has(item.id);
     const tags = [];
     if (item.has_tools) tags.push('工具');
     if (item.has_vision) tags.push('視覺');
@@ -490,13 +456,9 @@ function renderCatalog() {
 }
 
 $('btn-model-catalog').addEventListener('click', openCatalogModal);
-$('btn-cat-load').addEventListener('click', () => loadCatalog(false));
 $('btn-cat-refresh').addEventListener('click', () => loadCatalog(true));
 $('cat-search').addEventListener('input', renderCatalog);
 $('cat-all').addEventListener('change', renderCatalog);
-$('cat-tool').addEventListener('change', () => {
-  if ($('cat-tool').value.trim() !== state.catalogToolId) loadCatalog(false);
-});
 
 $('cat-list').addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-add]');
@@ -509,7 +471,7 @@ $('cat-list').addEventListener('click', async (event) => {
   try {
     state.session = await api('/api/models', {
       method: 'POST',
-      body: { id: alias, name: item.title, tool_id: state.catalogToolId, model_id: item.id },
+      body: { id: alias, name: item.title, model_id: item.id },
     });
     renderSession();
     renderCatalog();
