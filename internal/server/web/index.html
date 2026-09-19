@@ -117,7 +117,7 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--green); cu
 .auth-card p.sub { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.75; }
 
 /* ---------- 版面 ---------- */
-.wrap { max-width: 1080px; margin: 0 auto; padding: 26px 22px 72px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 26px 22px 28px; }
 
 header.top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
 .brand { display: flex; align-items: center; gap: 12px; }
@@ -216,6 +216,17 @@ code.secret { color: var(--green-ink); }
   text-align: center; color: var(--muted); padding: 54px 16px;
   border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface);
 }
+.hint { margin: 10px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.75; }
+
+/* ---------- 頁尾 ---------- */
+#view-dashboard { display: flex; flex-direction: column; min-height: 100vh; }
+.foot {
+  margin-top: auto; padding-top: 26px;
+  display: flex; justify-content: flex-end; gap: 5px;
+  font-size: 12.5px; color: var(--muted);
+}
+.foot a { color: var(--green-ink); font-weight: 600; text-decoration: none; }
+.foot a:hover { text-decoration: underline; }
 
 /* ---------- 彈出視窗 ---------- */
 .overlay {
@@ -329,8 +340,8 @@ details[open] summary::before { transform: rotate(90deg); }
     <div class="field-row">
       <span class="field-label">API 金鑰</span>
       <code class="secret" id="api-key">-</code>
-      <button class="btn btn-sm" data-copy="api-key">複製</button>
     </div>
+    <p class="hint">完整金鑰只在產生時顯示一次，需要再次查看請到「設定」重新產生。</p>
     <div class="chips" id="stat-chips"></div>
   </section>
 
@@ -338,6 +349,11 @@ details[open] summary::before { transform: rotate(90deg); }
     <div class="panel-head"><h2>號池</h2></div>
     <div id="accounts" class="grid"></div>
   </section>
+
+  <footer class="foot">
+    <a href="https://creeperdev.me" target="_blank" rel="noopener noreferrer">CreeperDEV</a>
+    <span>用 ❤️ 製作</span>
+  </footer>
 </div>
 
 <!-- 新增／編輯帳號 -->
@@ -372,8 +388,8 @@ details[open] summary::before { transform: rotate(90deg); }
 
     <div class="row">
       <button class="btn btn-sm" id="btn-regen-key">重新產生 API 金鑰</button>
-      <button class="btn btn-sm" id="btn-reveal-key">顯示／隱藏金鑰</button>
     </div>
+    <p class="hint">重新產生後舊金鑰會立即失效，新的金鑰只會顯示一次。</p>
 
     <div id="model-list" class="model-list"></div>
     <div class="row" style="margin-top:12px">
@@ -393,6 +409,21 @@ details[open] summary::before { transform: rotate(90deg); }
 
     <div class="modal-actions">
       <button class="btn" type="button" data-close="modal-settings">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新的 API 金鑰（只顯示一次） -->
+<div id="modal-key" class="overlay hidden">
+  <div class="modal">
+    <h3>新的 API 金鑰</h3>
+    <p class="hint">這組金鑰只會顯示這一次，關閉後就無法再查看；請立刻複製保存，忘了只能重新產生一組。</p>
+    <div class="field-row" style="margin-top:16px">
+      <code class="secret grow" id="fresh-key">-</code>
+      <button class="btn btn-sm btn-primary" data-copy="fresh-key">複製</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-close="modal-key">我已保存</button>
     </div>
   </div>
 </div>

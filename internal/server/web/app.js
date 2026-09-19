@@ -5,7 +5,6 @@ const state = {
   accounts: [],
   editing: null,
   timer: null,
-  keyVisible: false,
   catalog: [],
   catalogLoaded: false,
 };
@@ -71,12 +70,6 @@ function daysLeft(value) {
   return Math.floor((date.getTime() - Date.now()) / 86400000);
 }
 
-function maskKey(key) {
-  if (!key) return '-';
-  if (state.keyVisible || key.length <= 14) return key;
-  return key.slice(0, 10) + '••••••••' + key.slice(-4);
-}
-
 // ---------------------------------------------------------------- 初始化
 
 async function init() {
@@ -121,9 +114,18 @@ function stopPolling() {
 function renderSession() {
   const session = state.session || {};
   $('api-base').textContent = session.base_url || '-';
-  $('api-key').textContent = maskKey(session.api_key);
+  $('api-key').textContent = session.api_key_masked || '-';
+  if (session.api_key) showFreshKey(session.api_key);
 
   renderModels();
+}
+
+// showFreshKey 顯示剛產生的 API 金鑰，而且只顯示這一次。
+function showFreshKey(key) {
+  $('modal-settings').classList.add('hidden');
+  $('fresh-key').textContent = key;
+  $('modal-key').classList.remove('hidden');
+  delete state.session.api_key;
 }
 
 function renderChips(summary) {
@@ -194,7 +196,7 @@ function renderAccounts() {
           <div class="spacer"></div>
           ${accountBadges(account)}
         </div>
-        <div class="acct-id">${esc(account.email || '')} ${esc(account.id)}</div>
+        <div class="acct-id">${esc(account.email || account.id)} · auths/${esc(account.file_name || '')}</div>
         <div class="kv"><span>JWT</span><span>${esc(account.jwt || '-')}</span></div>
         <div class="kv"><span>JWT 到期</span><span>${esc(expiry)}</span></div>
         <div class="kv"><span>使用次數</span><span>${esc(stats.requests || 0)} 次（成功 ${esc(stats.success || 0)}／失敗 ${esc(stats.failed || 0)}）</span></div>
@@ -308,15 +310,8 @@ $('btn-regen-key').addEventListener('click', async () => {
   if (!confirm('重新產生後，舊的 API 金鑰會立即失效，確定嗎？')) return;
   try {
     state.session = await api('/api/settings', { method: 'PUT', body: { regenerate_api_key: true } });
-    state.keyVisible = true;
     renderSession();
-    toast('已產生新的 API 金鑰', 'ok');
   } catch (err) { toast(err.message, 'err'); }
-});
-
-$('btn-reveal-key').addEventListener('click', () => {
-  state.keyVisible = !state.keyVisible;
-  renderSession();
 });
 
 $('btn-change-password').addEventListener('click', async () => {
@@ -516,10 +511,6 @@ document.querySelectorAll('.overlay').forEach((overlay) => {
 document.querySelectorAll('[data-copy]').forEach((button) => {
   button.addEventListener('click', async () => {
     const target = $(button.dataset.copy);
-    if (button.dataset.copy === 'api-key' && !state.keyVisible) {
-      state.keyVisible = true;
-      renderSession();
-    }
     const text = target.textContent;
     try {
       await navigator.clipboard.writeText(text);

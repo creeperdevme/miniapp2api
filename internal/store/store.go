@@ -1,4 +1,4 @@
-// Package store 管理號池（帳號池），每個帳號以 auths/{uuid}.json 儲存。
+// Package store 管理號池（帳號池），每個帳號以 auths/{email}.json 儲存。
 package store
 
 import (
@@ -65,6 +65,69 @@ type Account struct {
 	LastErrorAt     string               `json:"-"`
 	CooldownUntil   time.Time            `json:"-"`
 	QuotaExceededAt map[string]time.Time `json:"-"`
+
+	// file 是這個帳號在 auths/ 下的檔名（不含 .json），由 Store 維護。
+	file string
+}
+
+// FileName 回傳帳號在 auths/ 下的檔名（不含 .json 副檔名）。
+func (a Account) FileName() string {
+	if a.file != "" {
+		return a.file
+	}
+	return defaultFileName(a)
+}
+
+// defaultFileName 以 email 為主，沒有 email 時退回名稱，最後才用 ID。
+func defaultFileName(acc Account) string {
+	if name := slugify(acc.Email); name != "" {
+		return name
+	}
+	if name := slugify(acc.Name); name != "" {
+		return name
+	}
+	return acc.ID
+}
+
+// reservedNames 是 Windows 保留下來的裝置名稱，不能當檔名。
+var reservedNames = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
+// slugify 把文字轉成安全的檔名片段，只保留小寫英數與 @ . + _ -。
+func slugify(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	dashed := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '@', r == '.', r == '+', r == '_', r == '-':
+			b.WriteRune(r)
+			dashed = r == '-'
+		default:
+			if !dashed {
+				b.WriteByte('-')
+				dashed = true
+			}
+		}
+	}
+
+	name := strings.Trim(b.String(), "-.")
+	if name == "" {
+		return ""
+	}
+	stem := name
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		stem = name[:i]
+	}
+	if reservedNames[stem] {
+		return "acct-" + name
+	}
+	return name
 }
 
 // LastUsed 回傳最後使用時間，未曾使用時回傳零值。
@@ -133,6 +196,7 @@ func (a Account) Redacted() Account {
 // View 是給網頁介面使用的帳號資料（已遮蔽敏感欄位並附上執行期狀態）。
 type View struct {
 	Account
+	FileName      string   `json:"file_name"`
 	CoolingDown   bool     `json:"cooling_down"`
 	QuotaExceeded bool     `json:"quota_exceeded"`
 	QuotaModels   []string `json:"quota_models,omitempty"`
@@ -145,6 +209,7 @@ func (a Account) View() View {
 	quotaModels := a.QuotaExceededModels()
 	return View{
 		Account:       a.Redacted(),
+		FileName:      a.FileName() + ".json",
 		CoolingDown:   a.CoolingDown(),
 		QuotaExceeded: len(quotaModels) > 0,
 		QuotaModels:   quotaModels,
@@ -207,12 +272,63 @@ func Open(root string) (*Store, error) {
 			acc.CreatedAt = time.Now().Format(time.RFC3339)
 		}
 		applyJWT(&acc)
+		acc.file = strings.TrimSuffix(entry.Name(), ".json")
 		s.accounts[acc.ID] = &acc
 		s.order = append(s.order, acc.ID)
 	}
 
 	sort.Strings(s.order)
+	s.renameToEmailFiles()
 	return s, nil
+}
+
+// renameToEmailFiles 把舊的 uuid 檔名改成以 email 為主的檔名。
+// 目標檔名已經被其他帳號使用時保留原檔名，避免覆蓋掉別人的設定。
+func (s *Store) renameToEmailFiles() {
+	for _, id := range s.order {
+		acc := s.accounts[id]
+		if acc == nil {
+			continue
+		}
+		desired := defaultFileName(*acc)
+		if desired == "" || desired == acc.file || s.fileTaken(desired, id) {
+			continue
+		}
+		if err := os.Rename(s.pathFor(acc.file), s.pathFor(desired)); err == nil {
+			acc.file = desired
+		}
+	}
+}
+
+// pathFor 回傳檔名在號池目錄中的完整路徑。
+func (s *Store) pathFor(name string) string {
+	return filepath.Join(s.dir, name+".json")
+}
+
+// fileTaken 回報檔名是否已經被其他帳號使用。
+func (s *Store) fileTaken(name, exceptID string) bool {
+	for id, other := range s.accounts {
+		if id == exceptID || other == nil {
+			continue
+		}
+		if strings.EqualFold(other.FileName(), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// assignFile 依帳號內容決定檔名，撞名時加上序號。
+func (s *Store) assignFile(acc *Account) {
+	base := defaultFileName(*acc)
+	if base == "" {
+		base = acc.ID
+	}
+	name := base
+	for i := 2; s.fileTaken(name, acc.ID); i++ {
+		name = fmt.Sprintf("%s-%d", base, i)
+	}
+	acc.file = name
 }
 
 // Dir 回傳號池目錄的完整路徑。
@@ -262,7 +378,7 @@ func (s *Store) Count() int {
 	return len(s.accounts)
 }
 
-// Create 新增一個帳號並寫入 auths/{uuid}.json。
+// Create 新增一個帳號並寫入 auths/{email}.json。
 func (s *Store) Create(acc Account) (Account, error) {
 	if strings.TrimSpace(acc.JWT) == "" {
 		return Account{}, errors.New("JWT 不可為空")
@@ -291,6 +407,7 @@ func (s *Store) Create(acc Account) (Account, error) {
 	if _, exists := s.accounts[acc.ID]; exists {
 		return Account{}, fmt.Errorf("帳號 %s 已存在", acc.ID)
 	}
+	s.assignFile(&acc)
 	if err := s.saveLocked(&acc); err != nil {
 		return Account{}, err
 	}
@@ -314,8 +431,14 @@ func (s *Store) Modify(id string, mutate func(*Account) error) (Account, error) 
 	}
 	acc.UpdatedAt = time.Now().Format(time.RFC3339)
 	applyJWT(acc)
+	previous := acc.file
+	s.assignFile(acc)
 	if err := s.saveLocked(acc); err != nil {
 		return Account{}, err
+	}
+	if previous != "" && previous != acc.file {
+		// 檔名跟著 email 改變時，把舊檔案清掉。
+		_ = os.Remove(s.pathFor(previous))
 	}
 	return *acc, nil
 }
@@ -325,10 +448,11 @@ func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.accounts[id]; !ok {
+	acc, ok := s.accounts[id]
+	if !ok {
 		return ErrNotFound
 	}
-	if err := os.Remove(s.filePath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(s.pathFor(acc.FileName())); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	delete(s.accounts, id)
@@ -490,16 +614,12 @@ func (s *Store) Summary() map[string]int64 {
 	return summary
 }
 
-func (s *Store) filePath(id string) string {
-	return filepath.Join(s.dir, id+".json")
-}
-
 func (s *Store) saveLocked(acc *Account) error {
 	data, err := json.MarshalIndent(acc, "", "  ")
 	if err != nil {
 		return err
 	}
-	path := s.filePath(acc.ID)
+	path := s.pathFor(acc.FileName())
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("寫入 %s 失敗：%w", path, err)

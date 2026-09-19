@@ -8,7 +8,7 @@
 
 - 第一次啟動時，網頁會要求設定一組管理密碼（存成 PBKDF2-HMAC-SHA256 雜湊，不會存明文）。
 - 登入後直接進入 **號池** 頁面，右上角有「**＋ 新增帳號**」。
-- 新增帳號只需填 **JWT**、**CSRF_Cookie**、**CSRF_Token**，會存成 `auths/{uuid}.json`。
+- 新增帳號只需填 **JWT**、**CSRF_Cookie**、**CSRF_Token**，會依 JWT 裡的 email 存成 `auths/{email}.json`。
 - 提供 OpenAI 相容端點：`GET /v1/models`、`POST /v1/chat/completions`（支援 `stream`）。
 - 模型清單預設是空的，從上游的模型目錄（`GET /ai-models`）挑選並加入即可。
 - 自動挑選最少使用的帳號，出錯的帳號會進入冷卻並自動換下一個帳號重試。
@@ -26,7 +26,7 @@ go build -o miniapp2api.exe .
  資料目錄   D:\Miniapp.ai Proxy
  網頁介面   http://127.0.0.1:8787/
  OpenAI API http://127.0.0.1:8787/v1
- API 金鑰   sk-m2a-xxxxxxxx
+ API 金鑰   sk-m2a-4163••••••••bd7b（完整金鑰請在網頁介面重新產生）
 ```
 
 ### 命令列參數
@@ -40,7 +40,7 @@ go build -o miniapp2api.exe .
 ## 網頁介面
 
 1. **首次開啟**：設定管理密碼（至少 6 個字元）。
-2. **登入後**：看到號池列表、API Base URL、API 金鑰與使用統計。
+2. **登入後**：看到號池列表、API Base URL、API 金鑰（只顯示遮罩）與使用統計。
 3. **新增帳號**：填入下列三個欄位，按「儲存」。
    - `JWT`：瀏覽器 DevTools → Application → Cookies → `api.miniapps.ai` → `jwt`
    - `CSRF_Cookie`：同處的 `__Host-miniapps.x-csrf-token`
@@ -49,7 +49,8 @@ go build -o miniapp2api.exe .
 5. 右上角 **設定** 可以管理模型：清單預設是空的，按「＋ 從模型目錄新增」，
    從上游的 `GET /ai-models` 目錄把模型「加入」或「移除」。目錄會快取 10 分鐘，需要重抓時按「重新抓取」。
 
-密碼與 API 金鑰都可以在右上角 **設定** 中變更。
+密碼與 API 金鑰都可以在右上角 **設定** 中變更；API 金鑰只在產生時顯示一次，之後要查看只能按
+「重新產生 API 金鑰」換一組新的（舊的會立即失效）。
 
 ## 使用 OpenAI API
 
@@ -126,10 +127,12 @@ print(response.choices[0].message.content)
 
 `models` 預設是空陣列；`tool_id` 不放在設定檔裡，一律使用程式內寫死的值。
 
-### `auths/{uuid}.json`
+### `auths/{email}.json`
 
 每個帳號一個檔案，內容只有 `jwt`、`csrf_cookie`、`csrf_token`、啟用狀態與使用統計
 （`modelId` 等一律來自 `config.json` 的模型設定，不放在帳號裡）。
+檔名取自 JWT 裡的 email，例如 `auths/tester@example.com.json`；同一個 email 有多筆帳號時
+會依序加上 `-2`、`-3`。舊版以 uuid 命名的檔案會在啟動時自動改成 email 檔名。
 檔案權限為 `0600`，可自行備份或複製到其他機器。
 
 ## 中轉流程
@@ -166,7 +169,7 @@ go test ./...
 ```
 main.go                     啟動、參數、開瀏覽器
 internal/config/            config.json（密碼雜湊、API 金鑰、模型設定）
-internal/store/             auths/{uuid}.json 號池
+internal/store/             auths/{email}.json 號池
 internal/miniapps/          api.miniapps.ai 用戶端與回應解析
 internal/openai/            OpenAI 相容格式與訊息轉換
 internal/server/            HTTP 路由、網頁介面與 /v1 端點

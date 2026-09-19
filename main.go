@@ -69,7 +69,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	printBanner(cfg, pool, root)
+	printBanner(cfg, pool, root, generated)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -105,7 +105,7 @@ func main() {
 	logger.Printf("已停止。")
 }
 
-func printBanner(cfg *config.Config, pool *store.Store, root string) {
+func printBanner(cfg *config.Config, pool *store.Store, root string, generatedKey bool) {
 	summary := pool.Summary()
 	line := strings.Repeat("─", 62)
 
@@ -115,7 +115,14 @@ func printBanner(cfg *config.Config, pool *store.Store, root string) {
 	fmt.Printf(" 資料目錄   %s\n", root)
 	fmt.Printf(" 網頁介面   %s\n", browserURL(cfg))
 	fmt.Printf(" OpenAI API %s\n", cfg.BaseURL())
-	fmt.Printf(" API 金鑰   %s\n", cfg.Key())
+	if generatedKey {
+		// 剛產生的金鑰只顯示這一次，之後只能從網頁介面重新產生。
+		fmt.Printf(" API 金鑰   %s\n", cfg.Key())
+		fmt.Println("            這是剛產生的金鑰，只會顯示這一次，請立刻保存；")
+		fmt.Println("            之後要查看請在網頁介面按「重新產生 API 金鑰」。")
+	} else {
+		fmt.Printf(" API 金鑰   %s（完整金鑰請在網頁介面重新產生）\n", config.MaskKey(cfg.Key()))
+	}
 	if cfg.RequireKey() {
 		fmt.Printf("            呼叫時請帶 Authorization: Bearer <API 金鑰>\n")
 	}

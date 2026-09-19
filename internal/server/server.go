@@ -171,21 +171,30 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 // ---------------------------------------------------------------------------
 
 type sessionPayload struct {
-	NeedsSetup    bool             `json:"needs_setup"`
-	LoggedIn      bool             `json:"logged_in"`
-	RequireAPIKey bool             `json:"require_api_key"`
-	APIKey        string           `json:"api_key,omitempty"`
-	BaseURL       string           `json:"base_url"`
-	Models        []config.Model   `json:"models"`
-	Pool          map[string]int64 `json:"pool"`
-	DataDir       string           `json:"data_dir"`
-	Version       string           `json:"version"`
+	NeedsSetup    bool `json:"needs_setup"`
+	LoggedIn      bool `json:"logged_in"`
+	RequireAPIKey bool `json:"require_api_key"`
+	// APIKey 只在金鑰剛產生時帶上，讓介面顯示一次；其他時候只有遮罩版本。
+	APIKey       string           `json:"api_key,omitempty"`
+	APIKeyMasked string           `json:"api_key_masked"`
+	BaseURL      string           `json:"base_url"`
+	Models       []config.Model   `json:"models"`
+	Pool         map[string]int64 `json:"pool"`
+	DataDir      string           `json:"data_dir"`
+	Version      string           `json:"version"`
 }
 
 // Version 是程式版本，會顯示在網頁介面上。
 const Version = "1.0.0"
 
 func (s *Server) sessionPayload(loggedIn bool) sessionPayload {
+	return s.sessionPayloadWithKey(loggedIn, "")
+}
+
+// sessionPayloadWithKey 產生介面用的 session 資料。
+//
+// freshKey 只在使用者剛產生金鑰時帶入，介面顯示過一次之後就不再回傳完整金鑰。
+func (s *Server) sessionPayloadWithKey(loggedIn bool, freshKey string) sessionPayload {
 	payload := sessionPayload{
 		NeedsSetup:    !s.cfg.HasPassword(),
 		LoggedIn:      loggedIn,
@@ -197,7 +206,8 @@ func (s *Server) sessionPayload(loggedIn bool) sessionPayload {
 		Version:       Version,
 	}
 	if loggedIn {
-		payload.APIKey = s.cfg.Key()
+		payload.APIKey = freshKey
+		payload.APIKeyMasked = s.cfg.KeyPreview()
 	}
 	return payload
 }
@@ -227,7 +237,8 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	token := s.sess.create()
 	s.setSessionCookie(w, token, int(sessionTTL.Seconds()))
 	s.log.Printf("已設定登入密碼")
-	writeJSON(w, http.StatusOK, s.sessionPayload(true))
+	// 首次設定時把剛產生的金鑰一起回傳，讓介面顯示一次。
+	writeJSON(w, http.StatusOK, s.sessionPayloadWithKey(true, s.cfg.Key()))
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -278,12 +289,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var freshKey string
 	if payload.RegenerateAPIKey {
 		key, err := s.cfg.RegenerateAPIKey()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		freshKey = key
 		s.log.Printf("已重新產生 API 金鑰：%s", store.MaskToken(key))
 	}
 	if payload.NewPassword != "" {
@@ -298,7 +311,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		s.log.Printf("登入密碼已變更")
 	}
 
-	writeJSON(w, http.StatusOK, s.sessionPayload(true))
+	writeJSON(w, http.StatusOK, s.sessionPayloadWithKey(true, freshKey))
 }
 
 // ---------------------------------------------------------------------------

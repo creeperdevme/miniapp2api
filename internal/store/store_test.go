@@ -11,8 +11,13 @@ import (
 
 func testJWT(t *testing.T) string {
 	t.Helper()
+	return testJWTWithEmail(t, "tester@example.com")
+}
+
+func testJWTWithEmail(t *testing.T, email string) string {
+	t.Helper()
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"id":"user-1","email":"tester@example.com","exp":1893456000}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"id":"user-1","email":"` + email + `","exp":1893456000}`))
 	return header + "." + payload + ".signature"
 }
 
@@ -36,7 +41,11 @@ func TestCreateAndPick(t *testing.T) {
 		t.Fatalf("應該從 JWT 解出信箱，得到 %q", account.Email)
 	}
 
-	path := filepath.Join(root, DirName, account.ID+".json")
+	// 檔名以 JWT 裡的 email 為主。
+	if account.FileName() != "tester@example.com" {
+		t.Fatalf("檔名應該用 email，得到 %q", account.FileName())
+	}
+	path := filepath.Join(root, DirName, "tester@example.com.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("帳號檔案不存在 %s：%v", path, err)
 	}
@@ -133,7 +142,7 @@ func TestModifyDisableAndDelete(t *testing.T) {
 	if err := pool.Delete(account.ID); err != nil {
 		t.Fatalf("Delete 失敗：%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, DirName, account.ID+".json")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, DirName, "tester@example.com.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("檔案應該被刪除：%v", err)
 	}
 	if pool.Count() != 0 {
@@ -177,6 +186,70 @@ func TestParseJWTRejectsGarbage(t *testing.T) {
 	}
 }
 
+// 帳號檔案以 email 命名；同名時加序號，換了 email 會跟著更名。
+func TestAccountFileNamedByEmail(t *testing.T) {
+	root := t.TempDir()
+	pool, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open 失敗：%v", err)
+	}
+	dir := filepath.Join(root, DirName)
+
+	first, err := pool.Create(Account{JWT: testJWT(t), CSRFCookie: "c", CSRFToken: "t", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create 失敗：%v", err)
+	}
+	if first.FileName() != "tester@example.com" {
+		t.Fatalf("檔名應該用 email，得到 %q", first.FileName())
+	}
+
+	// 同一個 email 再加一次時檔名加上序號，不會覆蓋掉前一個帳號。
+	second, err := pool.Create(Account{JWT: testJWT(t), CSRFCookie: "c2", CSRFToken: "t2", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create 失敗：%v", err)
+	}
+	if second.FileName() != "tester@example.com-2" {
+		t.Fatalf("撞名時應該加序號，得到 %q", second.FileName())
+	}
+	if _, err := os.Stat(filepath.Join(dir, second.FileName()+".json")); err != nil {
+		t.Fatalf("第二個帳號的檔案不存在：%v", err)
+	}
+
+	// 換成別的 email 時檔案會更名，舊檔案要消失。
+	if _, err := pool.Modify(second.ID, func(acc *Account) error {
+		acc.JWT = testJWTWithEmail(t, "renamed@example.com")
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify 失敗：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tester@example.com-2.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("舊檔名應該被移除：%v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "renamed@example.com.json"))
+	if err != nil {
+		t.Fatalf("新檔名的檔案不存在：%v", err)
+	}
+	if !strings.Contains(string(data), "renamed@example.com") {
+		t.Fatalf("檔案內容應該是新的 email：%s", data)
+	}
+
+	// 重開之後兩個帳號都還在，檔名維持以 email 命名。
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatalf("重新 Open 失敗：%v", err)
+	}
+	if reopened.Count() != 2 {
+		t.Fatalf("重開後應該有 2 個帳號，得到 %d", reopened.Count())
+	}
+	stored, ok := reopened.Get(second.ID)
+	if !ok {
+		t.Fatal("重開後找不到改名過的帳號")
+	}
+	if stored.FileName() != "renamed@example.com" {
+		t.Fatalf("重開後檔名應該維持 email，得到 %q", stored.FileName())
+	}
+}
+
 // 舊版帳號檔留下的欄位要能被忽略，讀取時不會出錯，寫回時會被清掉。
 func TestLoadLegacyAccountFile(t *testing.T) {
 	root := t.TempDir()
@@ -214,6 +287,10 @@ func TestLoadLegacyAccountFile(t *testing.T) {
 	if account.Name != "舊帳號" || account.JWT == "" || !account.Enabled {
 		t.Fatalf("舊帳號內容不正確：%+v", account)
 	}
+	// 舊的 uuid 檔名會自動改成以 email 為主。
+	if _, err := os.Stat(filepath.Join(dir, id+".json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("舊檔名應該被改名：%v", err)
+	}
 
 	// 觸發一次寫回，舊欄位應該要從檔案中消失。
 	if _, err := pool.Modify(id, func(acc *Account) error {
@@ -222,7 +299,7 @@ func TestLoadLegacyAccountFile(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Modify 失敗：%v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, id+".json"))
+	data, err := os.ReadFile(filepath.Join(dir, "tester@example.com.json"))
 	if err != nil {
 		t.Fatalf("讀取檔案失敗：%v", err)
 	}

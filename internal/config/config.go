@@ -285,6 +285,23 @@ func (c *Config) Key() string {
 	return c.APIKey
 }
 
+// MaskKey 只保留金鑰的頭尾，供介面顯示用。
+func MaskKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 14 {
+		return strings.Repeat("•", len(key))
+	}
+	return key[:10] + strings.Repeat("•", 8) + key[len(key)-4:]
+}
+
+// KeyPreview 回傳遮罩後的 API 金鑰。
+func (c *Config) KeyPreview() string {
+	return MaskKey(c.Key())
+}
+
 // EnsureAPIKey 在金鑰不存在時自動產生一組。
 func (c *Config) EnsureAPIKey() (bool, error) {
 	c.mu.Lock()
