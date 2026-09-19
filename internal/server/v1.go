@@ -246,7 +246,7 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
-		account, err := s.pool.Pick(excluded)
+		account, err := s.pool.Pick(excluded, model.ID)
 		if err != nil {
 			lastErr = err
 			break
@@ -256,8 +256,11 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 		client := miniapps.New(credentialsFor(account, model))
 		answer, conversationID, err := client.Ask(ctx, prompt, s.cfg.Timeout())
 		s.pool.Record(account.ID, err, cooldownFor(err))
-		if miniapps.IsQuotaError(err) {
-			s.pool.MarkQuotaExceeded(account.ID)
+		switch {
+		case err == nil:
+			s.pool.ClearQuotaExceeded(account.ID, model.ID)
+		case miniapps.IsQuotaError(err):
+			s.pool.MarkQuotaExceeded(account.ID, model.ID)
 		}
 
 		if err != nil {

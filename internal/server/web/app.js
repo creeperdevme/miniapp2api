@@ -164,7 +164,9 @@ function accountBadges(account) {
     badges.push('<span class="badge warn">冷卻中</span>');
   }
   if (account.quota_exceeded) {
-    badges.push('<span class="badge err">額度不足</span>');
+    const models = account.quota_models || [];
+    const title = models.length ? ` title="額度不足的模型：${esc(models.join('、'))}"` : '';
+    badges.push(`<span class="badge err"${title}>額度不足</span>`);
   }
   const left = daysLeft(account.expires_at);
   if (left !== null) {

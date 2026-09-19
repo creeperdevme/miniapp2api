@@ -49,7 +49,7 @@ func TestCreateAndPick(t *testing.T) {
 		t.Fatalf("List 應該回傳 1 筆，得到 %d", len(views))
 	}
 
-	picked, err := pool.Pick(nil)
+	picked, err := pool.Pick(nil, "test-model")
 	if err != nil {
 		t.Fatalf("Pick 失敗：%v", err)
 	}
@@ -59,13 +59,13 @@ func TestCreateAndPick(t *testing.T) {
 
 	// 發生錯誤後帳號會進入冷卻，不能再被挑中。
 	pool.Record(account.ID, errors.New("boom"), CooldownDuration)
-	if _, err := pool.Pick(nil); !errors.Is(err, ErrNoAccount) {
+	if _, err := pool.Pick(nil, "test-model"); !errors.Is(err, ErrNoAccount) {
 		t.Fatalf("冷卻中的帳號不應該被挑中，得到 %v", err)
 	}
 
 	// 成功後冷卻解除。
 	pool.Record(account.ID, nil, CooldownDuration)
-	if _, err := pool.Pick(nil); err != nil {
+	if _, err := pool.Pick(nil, "test-model"); err != nil {
 		t.Fatalf("冷卻應該要解除：%v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestRecordWithoutCooldownKeepsAccountAvailable(t *testing.T) {
 
 	pool.Record(account.ID, errors.New("額度不足"), 0)
 
-	if _, err := pool.Pick(nil); err != nil {
+	if _, err := pool.Pick(nil, "test-model"); err != nil {
 		t.Fatalf("沒有冷卻時應該還能被挑中：%v", err)
 	}
 	stored, _ := pool.Get(account.ID)
@@ -122,7 +122,7 @@ func TestModifyDisableAndDelete(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Modify 失敗：%v", err)
 	}
-	if _, err := pool.Pick(nil); !errors.Is(err, ErrNoAccount) {
+	if _, err := pool.Pick(nil, "test-model"); !errors.Is(err, ErrNoAccount) {
 		t.Fatalf("停用的帳號不應該被挑中，得到 %v", err)
 	}
 
@@ -233,7 +233,8 @@ func TestLoadLegacyAccountFile(t *testing.T) {
 	}
 }
 
-// 額度不足的帳號應該排到候選順位的最後，沒有其他選擇時仍然可用。
+// 額度不足的帳號應該在「該模型」上排到候選順位的最後，
+// 沒有其他選擇時仍然可用，而且不會影響其他模型。
 func TestQuotaExceededAccountPickedLast(t *testing.T) {
 	pool, err := Open(t.TempDir())
 	if err != nil {
@@ -249,22 +250,31 @@ func TestQuotaExceededAccountPickedLast(t *testing.T) {
 		t.Fatalf("Create 失敗：%v", err)
 	}
 
-	// 暖身：讓 second 剛被用過，first 成為最久未使用的帳號。
+	// second 剛被用過，first 的 LastUsed 還是零值，因此 first 一定是最久未使用的帳號。
 	pool.MarkUsed(second.ID)
 
-	picked, err := pool.Pick(nil)
+	// first 在 model-a 上額度不足。
+	pool.MarkQuotaExceeded(first.ID, "model-a")
+
+	stored, _ := pool.Get(first.ID)
+	if !stored.QuotaExceededFor("model-a") {
+		t.Fatal("model-a 應該被標記為額度不足")
+	}
+	if stored.QuotaExceededFor("model-b") {
+		t.Fatal("model-b 不應該受到 model-a 的額度不足影響")
+	}
+
+	// 挑選 model-b 時 first 沒有被降優先序，仍然應該因為最久未使用而被選中。
+	picked, err := pool.Pick(nil, "model-b")
 	if err != nil {
 		t.Fatalf("Pick 失敗：%v", err)
 	}
 	if picked.ID != first.ID {
-		t.Fatalf("暖身挑選應該挑到最久未使用的 first，得到 %s", picked.ID)
+		t.Fatalf("其他模型不應該受到影響，應該挑到 first，得到 %s", picked.ID)
 	}
 
-	// first 額度不足後，即使它最久未使用，也應該讓 second 優先。
-	pool.MarkQuotaExceeded(first.ID)
-	pool.MarkUsed(second.ID)
-
-	picked, err = pool.Pick(nil)
+	// 挑選 model-a 時，即使 first 最久未使用，也應該讓 second 優先。
+	picked, err = pool.Pick(nil, "model-a")
 	if err != nil {
 		t.Fatalf("Pick 失敗：%v", err)
 	}
@@ -273,7 +283,7 @@ func TestQuotaExceededAccountPickedLast(t *testing.T) {
 	}
 
 	// 沒有其他選擇時，額度不足的帳號仍然可以被挑中（不是被停用）。
-	picked, err = pool.Pick(map[string]bool{second.ID: true})
+	picked, err = pool.Pick(map[string]bool{second.ID: true}, "model-a")
 	if err != nil {
 		t.Fatalf("額度不足的帳號不應該被停用：%v", err)
 	}
@@ -282,8 +292,8 @@ func TestQuotaExceededAccountPickedLast(t *testing.T) {
 	}
 }
 
-// 帳號恢復正常後，額度不足的標記應該要清除。
-func TestSuccessfulRecordClearsQuotaExceeded(t *testing.T) {
+// 清除額度不足標記時只會影響指定的模型。
+func TestClearQuotaExceededIsPerModel(t *testing.T) {
 	pool, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open 失敗：%v", err)
@@ -293,13 +303,23 @@ func TestSuccessfulRecordClearsQuotaExceeded(t *testing.T) {
 		t.Fatalf("Create 失敗：%v", err)
 	}
 
-	pool.MarkQuotaExceeded(account.ID)
-	if stored, _ := pool.Get(account.ID); !stored.QuotaExceeded() {
-		t.Fatal("標記之後應該要處於額度不足狀態")
+	pool.MarkQuotaExceeded(account.ID, "model-a")
+	pool.MarkQuotaExceeded(account.ID, "model-b")
+
+	stored, _ := pool.Get(account.ID)
+	if !stored.QuotaExceededFor("model-a") || !stored.QuotaExceededFor("model-b") {
+		t.Fatal("標記之後兩個模型都應該處於額度不足狀態")
+	}
+	if got := len(stored.QuotaExceededModels()); got != 2 {
+		t.Fatalf("應該有 2 個模型被標記，得到 %d", got)
 	}
 
-	pool.Record(account.ID, nil, CooldownDuration)
-	if stored, _ := pool.Get(account.ID); stored.QuotaExceeded() {
-		t.Fatal("成功之後應該要清除額度不足標記")
+	pool.ClearQuotaExceeded(account.ID, "model-a")
+	stored, _ = pool.Get(account.ID)
+	if stored.QuotaExceededFor("model-a") {
+		t.Fatal("model-a 的標記應該要清除")
+	}
+	if !stored.QuotaExceededFor("model-b") {
+		t.Fatal("清除 model-a 不應該影響 model-b")
 	}
 }

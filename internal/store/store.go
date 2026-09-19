@@ -25,8 +25,9 @@ const (
 
 	// QuotaWindow 是帳號額度不足後，被排到候選順位最後的時間長度。
 	//
-	// 額度不足通常只代表「這個帳號沒額度」而不是帳號失效，
-	// 讓它冷卻會連帶使其他模型一起不能用，因此不冷卻；
+	// 額度不足是「帳號 × 模型」層級：同一個帳號可能買得起便宜模型、
+	// 卻買不起昂貴模型，所以標記要按模型分開記錄，不能整個帳號一起降優先序。
+	// 讓帳號冷卻會連帶使其他模型一起不能用，因此不冷卻；
 	// 改成只把它排到候選順位的最後，期限過後自動回到正常順位。
 	QuotaWindow = 10 * time.Minute
 )
@@ -60,10 +61,10 @@ type Account struct {
 	Stats      Stats  `json:"stats"`
 
 	// 以下為執行期狀態，不會寫入檔案。
-	LastError       string    `json:"-"`
-	LastErrorAt     string    `json:"-"`
-	CooldownUntil   time.Time `json:"-"`
-	QuotaExceededAt time.Time `json:"-"`
+	LastError       string               `json:"-"`
+	LastErrorAt     string               `json:"-"`
+	CooldownUntil   time.Time            `json:"-"`
+	QuotaExceededAt map[string]time.Time `json:"-"`
 }
 
 // LastUsed 回傳最後使用時間，未曾使用時回傳零值。
@@ -89,9 +90,25 @@ func (a Account) CoolingDown() bool {
 	return !a.CooldownUntil.IsZero() && time.Now().Before(a.CooldownUntil)
 }
 
-// QuotaExceeded 回報帳號是否因為額度不足而被排到候選順位的最後。
-func (a Account) QuotaExceeded() bool {
-	return !a.QuotaExceededAt.IsZero() && time.Since(a.QuotaExceededAt) < QuotaWindow
+// QuotaExceededFor 回報帳號是否因為「指定模型」額度不足而被降優先序。
+//
+// 額度不足是「帳號 × 模型」層級：402／412 取決於該模型的 creditPrice
+// 與帳號餘額，同一個帳號可以買得起便宜模型卻買不起昂貴模型。
+func (a Account) QuotaExceededFor(modelID string) bool {
+	at, ok := a.QuotaExceededAt[modelID]
+	return ok && !at.IsZero() && time.Since(at) < QuotaWindow
+}
+
+// QuotaExceededModels 回傳目前因額度不足而被降優先序的模型 ID（已排序）。
+func (a Account) QuotaExceededModels() []string {
+	ids := make([]string, 0, len(a.QuotaExceededAt))
+	for modelID := range a.QuotaExceededAt {
+		if a.QuotaExceededFor(modelID) {
+			ids = append(ids, modelID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // DisplayName 回傳用來顯示的名稱。
@@ -116,18 +133,21 @@ func (a Account) Redacted() Account {
 // View 是給網頁介面使用的帳號資料（已遮蔽敏感欄位並附上執行期狀態）。
 type View struct {
 	Account
-	CoolingDown   bool   `json:"cooling_down"`
-	QuotaExceeded bool   `json:"quota_exceeded"`
-	LastError     string `json:"last_error,omitempty"`
-	LastErrorAt   string `json:"last_error_at,omitempty"`
+	CoolingDown   bool     `json:"cooling_down"`
+	QuotaExceeded bool     `json:"quota_exceeded"`
+	QuotaModels   []string `json:"quota_models,omitempty"`
+	LastError     string   `json:"last_error,omitempty"`
+	LastErrorAt   string   `json:"last_error_at,omitempty"`
 }
 
 // View 產生網頁介面用的資料。
 func (a Account) View() View {
+	quotaModels := a.QuotaExceededModels()
 	return View{
 		Account:       a.Redacted(),
 		CoolingDown:   a.CoolingDown(),
-		QuotaExceeded: a.QuotaExceeded(),
+		QuotaExceeded: len(quotaModels) > 0,
+		QuotaModels:   quotaModels,
 		LastError:     a.LastError,
 		LastErrorAt:   a.LastErrorAt,
 	}
@@ -338,7 +358,6 @@ func (s *Store) Record(id string, requestErr error, cooldown time.Duration) {
 		acc.LastError = ""
 		acc.LastErrorAt = ""
 		acc.CooldownUntil = time.Time{}
-		acc.QuotaExceededAt = time.Time{}
 	} else {
 		acc.Stats.Failed++
 		acc.LastError = requestErr.Error()
@@ -350,16 +369,31 @@ func (s *Store) Record(id string, requestErr error, cooldown time.Duration) {
 	_ = s.saveLocked(acc)
 }
 
-// MarkQuotaExceeded 記錄帳號因為額度不足而失敗。
+// MarkQuotaExceeded 記錄帳號在「指定模型」上額度不足。
 //
-// 這只會讓帳號在挑選時排到最後，並不會停用帳號；
+// 這只會讓該帳號在挑選該模型時排到最後，並不會停用帳號；
 // 其他還有額度的帳號會優先被選到，全部都沒額度時仍會輪到它。
-func (s *Store) MarkQuotaExceeded(id string) {
+func (s *Store) MarkQuotaExceeded(id, modelID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	acc, ok := s.accounts[id]
+	if !ok {
+		return
+	}
+	if acc.QuotaExceededAt == nil {
+		acc.QuotaExceededAt = map[string]time.Time{}
+	}
+	acc.QuotaExceededAt[modelID] = time.Now()
+}
+
+// ClearQuotaExceeded 清除帳號在「指定模型」上的額度不足標記。
+func (s *Store) ClearQuotaExceeded(id, modelID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if acc, ok := s.accounts[id]; ok {
-		acc.QuotaExceededAt = time.Now()
+		delete(acc.QuotaExceededAt, modelID)
 	}
 }
 
@@ -390,7 +424,10 @@ func (s *Store) SetError(id, message string) {
 }
 
 // Pick 依「最久未使用」挑選一個可用帳號。
-func (s *Store) Pick(exclude map[string]bool) (Account, error) {
+//
+// 在 modelID 這個模型上額度不足的帳號會被排到候選順位的最後，
+// 但仍然可以被挑中（不冷卻、不停用）。
+func (s *Store) Pick(exclude map[string]bool, modelID string) (Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -406,7 +443,7 @@ func (s *Store) Pick(exclude map[string]bool) (Account, error) {
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if left, right := candidates[i].QuotaExceeded(), candidates[j].QuotaExceeded(); left != right {
+		if left, right := candidates[i].QuotaExceededFor(modelID), candidates[j].QuotaExceededFor(modelID); left != right {
 			return !left
 		}
 		left, right := candidates[i].LastUsed(), candidates[j].LastUsed()
@@ -440,7 +477,7 @@ func (s *Store) Summary() map[string]int64 {
 		if acc.CoolingDown() {
 			summary["cooldown"]++
 		}
-		if acc.QuotaExceeded() {
+		if len(acc.QuotaExceededModels()) > 0 {
 			summary["quota"]++
 		}
 		if acc.Expired() {
