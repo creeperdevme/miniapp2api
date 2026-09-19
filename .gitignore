@@ -1,0 +1,19 @@
+# 執行檔
+miniapp2api
+miniapp2api.exe
+*.exe
+
+# 本機執行資料（含密碼雜湊、API 金鑰、帳號 JWT／CSRF）
+config.json
+auths/
+
+# 日誌與暫存
+*.log
+*.tmp
+*.test
+
+# 編輯器與系統檔
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

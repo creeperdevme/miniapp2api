@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>miniapp2api</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🌿</text></svg>">
+<style>
+:root {
+  --bg: #fafbfa;
+  --surface: #ffffff;
+  --border: #e6ebe7;
+  --border-strong: #d8dfda;
+  --text: #1e2a23;
+  --muted: #6b7a72;
+  --green: #3fae76;
+  --green-ink: #12452a;
+  --green-soft: #a8e5be;
+  --green-soft-hover: #93dcae;
+  --green-tint: #f1faf5;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --err: #dc2626;
+  --radius: 16px;
+  --shadow: 0 1px 2px rgba(20, 40, 30, .04), 0 8px 24px rgba(20, 40, 30, .05);
+}
+
+* { box-sizing: border-box; }
+.hidden { display: none !important; }
+.spacer { flex: 1; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.grow { flex: 1; min-width: 130px; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", "Noto Sans TC", "Microsoft JhengHei", -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 按鈕 ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, border-color .15s, box-shadow .15s, transform .06s;
+}
+.btn:hover { border-color: var(--green-soft); background: var(--green-tint); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.btn-primary {
+  background: var(--green-soft);
+  border-color: transparent;
+  color: var(--green-ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(20, 40, 30, .07);
+}
+.btn-primary:hover { background: var(--green-soft-hover); border-color: transparent; }
+.btn-danger { color: var(--err); border-color: #f2d8d8; }
+.btn-danger:hover { background: #fdf4f4; border-color: #eec4c4; }
+.btn-ghost { border-color: transparent; color: var(--muted); }
+.btn-ghost:hover { border-color: transparent; color: var(--green-ink); }
+.btn-sm { padding: 6px 13px; font-size: 12.5px; }
+.btn-block { width: 100%; margin-top: 22px; padding: 12px; font-size: 14px; }
+
+/* ---------- 表單元件 ---------- */
+label { display: block; font-size: 12.5px; color: var(--muted); margin: 15px 0 6px; }
+input[type=text], input[type=password], input[type=number], textarea, select {
+  width: 100%;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  transition: border-color .15s, box-shadow .15s;
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--green-soft);
+  box-shadow: 0 0 0 3px rgba(168, 229, 190, .4);
+}
+textarea { resize: vertical; min-height: 64px; word-break: break-all; }
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--green); cursor: pointer; }
+
+/* ---------- 登入／首次設定 ---------- */
+.center { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  padding: 34px 32px;
+  box-shadow: var(--shadow);
+}
+.auth-card .mark {
+  width: 46px; height: 46px; border-radius: 14px;
+  background: var(--green-tint); border: 1px solid #dff3e7;
+  display: flex; align-items: center; justify-content: center; font-size: 22px;
+}
+.auth-card h1 { margin: 16px 0 6px; font-size: 21px; font-weight: 700; letter-spacing: -.01em; }
+.auth-card p.sub { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.75; }
+
+/* ---------- 版面 ---------- */
+.wrap { max-width: 1080px; margin: 0 auto; padding: 26px 22px 72px; }
+
+header.top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand .mark {
+  width: 42px; height: 42px; border-radius: 13px;
+  background: var(--green-tint); border: 1px solid #dff3e7;
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+}
+.brand strong { display: block; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.brand small { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+.panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.panel h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.field-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.field-row:last-of-type { margin-bottom: 0; }
+.field-label { font-size: 12.5px; color: var(--muted); min-width: 68px; }
+code {
+  background: var(--green-tint);
+  border: 1px solid #e2f2e9;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  word-break: break-all;
+}
+code.secret { color: var(--green-ink); }
+
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.chip {
+  background: var(--green-tint);
+  border: 1px solid #e2f2e9;
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chip b { color: var(--green-ink); font-weight: 700; margin-left: 3px; }
+
+/* ---------- 帳號卡片 ---------- */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.acct {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.acct:hover { border-color: var(--green-soft); box-shadow: var(--shadow); }
+.acct.off { opacity: .6; }
+.acct-top { display: flex; align-items: center; gap: 8px; }
+.acct-name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+.acct-id {
+  font-size: 11.5px; color: var(--muted); word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.kv {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 12.5px; color: var(--muted);
+  border-top: 1px dashed #eef3ef; padding-top: 7px;
+}
+.kv span:last-child { color: var(--text); text-align: right; word-break: break-all; }
+.badge {
+  font-size: 11px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+}
+.badge.ok { color: var(--green-ink); background: var(--green-tint); border-color: #cfefdc; }
+.badge.err { color: var(--err); background: #fdf4f4; border-color: #f2d8d8; }
+.badge.warn { color: var(--warn); background: #fff9ef; border-color: #f6e3c4; }
+.err-line {
+  font-size: 12px; color: var(--err); background: #fdf4f4;
+  border: 1px solid #f2d8d8; border-radius: 10px; padding: 8px 10px; word-break: break-word;
+}
+.acct-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 12px; }
+.empty {
+  text-align: center; color: var(--muted); padding: 54px 16px;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface);
+}
+
+/* ---------- 彈出視窗 ---------- */
+.overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(24, 40, 32, .28);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal {
+  width: 100%; max-width: 520px; max-height: 88vh; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 22px; padding: 26px 26px 22px;
+  box-shadow: 0 24px 60px rgba(20, 40, 30, .18);
+}
+.modal h3 { margin: 0 0 6px; font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+.modal p.hint { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.75; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+
+details { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+summary { cursor: pointer; font-size: 12.5px; color: var(--muted); list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "›"; display: inline-block; margin-right: 6px; transition: transform .15s; }
+details[open] summary::before { transform: rotate(90deg); }
+
+/* ---------- 通知 ---------- */
+.toast { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 90; }
+.toast div {
+  background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--green-soft);
+  border-radius: 12px; padding: 11px 15px; font-size: 13px; max-width: 380px;
+  box-shadow: var(--shadow); animation: slide-in .18s ease-out;
+}
+.toast div.ok { border-left-color: var(--ok); }
+.toast div.err { border-left-color: var(--err); }
+@keyframes slide-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+
+<!-- 首次設定密碼 -->
+<div id="view-setup" class="center hidden">
+  <form class="auth-card" id="setup-form">
+    <div class="mark">🌿</div>
+    <h1>設定登入密碼</h1>
+    <p class="sub">第一次啟動 miniapp2api，請先設定一組管理密碼。<br>之後開啟網頁都需要這組密碼才能進入號池。</p>
+    <label for="setup-password">密碼（至少 6 個字元）</label>
+    <input id="setup-password" type="password" autocomplete="new-password" required>
+    <label for="setup-confirm">再次輸入密碼</label>
+    <input id="setup-confirm" type="password" autocomplete="new-password" required>
+    <button class="btn btn-primary btn-block" type="submit">建立密碼並進入</button>
+  </form>
+</div>
+
+<!-- 登入 -->
+<div id="view-login" class="center hidden">
+  <form class="auth-card" id="login-form">
+    <div class="mark">🌿</div>
+    <h1>miniapp2api</h1>
+    <p class="sub">請輸入管理密碼以進入號池。</p>
+    <label for="login-password">密碼</label>
+    <input id="login-password" type="password" autocomplete="current-password" required>
+    <button class="btn btn-primary btn-block" type="submit">登入</button>
+  </form>
+</div>
+
+<!-- 主要介面 -->
+<div id="view-dashboard" class="wrap hidden">
+  <header class="top">
+    <div class="brand">
+      <div class="mark">🌿</div>
+      <div>
+        <strong>miniapp2api</strong>
+        <small><span class="dot" id="health-dot"></span>MiniApps 號池中轉 · OpenAI 相容 API</small>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="actions">
+      <button class="btn" id="btn-settings">設定</button>
+      <button class="btn" id="btn-refresh">重新整理</button>
+      <button class="btn btn-primary" id="btn-add">＋ 新增帳號</button>
+      <button class="btn btn-ghost" id="btn-logout">登出</button>
+    </div>
+  </header>
+
+  <section class="panel">
+    <div class="panel-head"><h2>API 資訊</h2></div>
+    <div class="field-row">
+      <span class="field-label">Base URL</span>
+      <code id="api-base">-</code>
+      <button class="btn btn-sm" data-copy="api-base">複製</button>
+    </div>
+    <div class="field-row">
+      <span class="field-label">API 金鑰</span>
+      <code class="secret" id="api-key">-</code>
+      <button class="btn btn-sm" data-copy="api-key">複製</button>
+    </div>
+    <div class="chips" id="stat-chips"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>號池</h2></div>
+    <div id="accounts" class="grid"></div>
+  </section>
+</div>
+
+<!-- 新增／編輯帳號 -->
+<div id="modal-account" class="overlay hidden">
+  <form class="modal" id="account-form">
+    <h3 id="account-title">新增帳號</h3>
+    <p class="hint" id="account-hint">貼上瀏覽器登入 miniapps.ai 後的 JWT 與 CSRF 資訊。</p>
+
+    <label for="acct-name">名稱（選填）</label>
+    <input id="acct-name" type="text" placeholder="例如：主帳號">
+
+    <label for="acct-jwt">JWT</label>
+    <textarea id="acct-jwt" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." required></textarea>
+
+    <label for="acct-csrf-cookie">CSRF_Cookie</label>
+    <textarea id="acct-csrf-cookie" placeholder="__Host-miniapps.x-csrf-token 的 Cookie 值" required></textarea>
+
+    <label for="acct-csrf-token">CSRF_Token</label>
+    <textarea id="acct-csrf-token" placeholder="請求標頭 x-csrf-token 的值" required></textarea>
+
+    <div class="modal-actions">
+      <button class="btn" type="button" data-close="modal-account">取消</button>
+      <button class="btn btn-primary" type="submit" id="account-submit">儲存</button>
+    </div>
+  </form>
+</div>
+
+<!-- 設定 -->
+<div id="modal-settings" class="overlay hidden">
+  <div class="modal">
+    <h3>設定</h3>
+    <p class="hint">號池目錄：<span id="data-dir">-</span></p>
+
+    <label>API 金鑰驗證</label>
+    <div class="row">
+      <label style="margin:0;flex:1" for="req-key">呼叫 /v1 時必須帶 API 金鑰</label>
+      <input id="req-key" type="checkbox">
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn btn-sm" id="btn-regen-key">重新產生 API 金鑰</button>
+      <button class="btn btn-sm" id="btn-reveal-key">顯示／隱藏金鑰</button>
+    </div>
+
+    <details open>
+      <summary>修改登入密碼</summary>
+      <label for="cur-password">目前密碼</label>
+      <input id="cur-password" type="password" autocomplete="current-password">
+      <label for="new-password">新密碼（至少 6 個字元）</label>
+      <input id="new-password" type="password" autocomplete="new-password">
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-sm" id="btn-change-password">更新密碼</button>
+      </div>
+    </details>
+
+    <details>
+      <summary>可用的模型</summary>
+      <div id="model-list" style="margin-top:12px;font-size:12.5px;color:var(--muted);line-height:2"></div>
+    </details>
+
+    <div class="modal-actions">
+      <button class="btn" type="button" data-close="modal-settings">關閉</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>
