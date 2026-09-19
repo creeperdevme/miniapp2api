@@ -45,8 +45,10 @@ go build -o miniapp2api.exe .
    - `CSRF_Cookie`：同處的 `__Host-miniapps.x-csrf-token`
    - `CSRF_Token`：DevTools → Network → 任一 `POST /chat` 請求 → 標頭 `x-csrf-token`
 4. 每張帳號卡片可以 **測試**（只呼叫 `quickAccess`，不消耗 AI 額度）、**編輯**、**停用／啟用**、**刪除**。
+5. 右上角 **設定** 可以管理對外開放的模型：從上游的模型目錄（`GET /ai-models`）挑選並「加入」，
+   或移除不需要的模型；目錄會依 `toolId` 快取 10 分鐘，需要重抓時按「重新抓取」。
 
-密碼與 API 金鑰都可以在右上角「⚙️ 設定」中變更。
+密碼與 API 金鑰都可以在右上角 **設定** 中變更。
 
 ## 使用 OpenAI API
 
@@ -88,7 +90,10 @@ print(response.choices[0].message.content)
 | `gpt-5.6-luna` | `b95a7fe5-fd23-4b72-8c05-aa5ff51df1f1` | `65afe0d6-4215-4408-8a7d-8f32f9e592a7` |
 
 - 傳入未知的模型名稱（例如 `gpt-4o`）時，會自動使用第一組設定的模型，方便現成客戶端直接接入。
-- 要新增其他模型，編輯 `config.json` 的 `models` 陣列即可；內建模型若不在設定檔中會自動補上，已有的設定不會被覆蓋。
+- 要新增其他模型，打開右上角 **設定** →「＋ 從模型目錄新增」：清單直接來自上游的 `GET /ai-models`，
+  填好 `toolId` 後按「加入」即可。對外名稱預設取上游的 `nativeId`，撞名時會自動加上後綴。
+- 也可以直接編輯 `config.json` 的 `models` 陣列；內建模型若不在設定檔中會自動補上，已有的設定不會被覆蓋。
+- 透過介面移除內建模型時會記在 `removed_models`，重新啟動後不會被自動補回來；至少要保留一個模型。
 
 ## 檔案說明
 
@@ -120,9 +125,12 @@ print(response.choices[0].message.content)
       "revision": 1,
       "language": "zh"
     }
-  ]
+  ],
+  "removed_models": []
 }
 ```
+
+`removed_models` 只在使用者從介面移除內建模型時才會有內容，用來避免內建模型被自動補回來。
 
 ### `auths/{uuid}.json`
 

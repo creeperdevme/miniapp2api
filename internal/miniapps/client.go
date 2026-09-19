@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -300,6 +301,62 @@ func (c *Client) Messages(ctx context.Context, conversationID string) ([]byte, e
 		return nil, &Error{Op: "GET /conversations/{id}/messages", Status: status, Body: truncate(string(body), 800)}
 	}
 	return body, nil
+}
+
+// AIModel 是 /ai-models 目錄中的單一上游模型。
+type AIModel struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	NativeID     string `json:"nativeId"`
+	PlatformID   string `json:"platformId"`
+	Type         string `json:"type"`
+	CreditPrice  int    `json:"creditPrice"`
+	VariantLabel string `json:"variantLabel"`
+	HasTools     bool   `json:"hasTools"`
+	HasVision    bool   `json:"hasVision"`
+	IsReasoning  bool   `json:"isReasoning"`
+	Enabled      bool   `json:"enabled"`
+	IsVisible    bool   `json:"isVisible"`
+	IsDown       bool   `json:"isDown"`
+}
+
+// AIModels 取得指定 toolId 可用的模型目錄（只讀取清單，不會消耗 AI 額度）。
+//
+// 目錄只依賴帳號的 JWT / CSRF，不需要 modelId，回傳結果會依名稱排序。
+func (c *Client) AIModels(ctx context.Context, toolID string) ([]AIModel, error) {
+	options := `{"itemsPerPage":10000}`
+	query := url.Values{"options": {options}}
+	if tool := strings.TrimSpace(toolID); tool != "" {
+		query.Set("toolId", tool)
+	}
+
+	body, status, err := c.do(ctx, http.MethodGet, "/ai-models", query, nil)
+	if err != nil {
+		return nil, &Error{Op: "GET /ai-models", Err: err}
+	}
+	if status != http.StatusOK {
+		return nil, &Error{Op: "GET /ai-models", Status: status, Body: truncate(string(body), 800)}
+	}
+
+	var payload struct {
+		Items []AIModel `json:"items"`
+		Data  []AIModel `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, &Error{Op: "GET /ai-models", Body: "回應格式不是預期的 JSON：" + truncate(string(body), 400), Err: err}
+	}
+	models := payload.Items
+	if models == nil {
+		models = payload.Data
+	}
+	sort.SliceStable(models, func(i, j int) bool {
+		left, right := strings.ToLower(models[i].Title), strings.ToLower(models[j].Title)
+		if left != right {
+			return left < right
+		}
+		return models[i].ID < models[j].ID
+	})
+	return models, nil
 }
 
 // Wait 輪詢直到 AI 回覆完成。

@@ -6,6 +6,9 @@ const state = {
   editing: null,
   timer: null,
   keyVisible: false,
+  catalog: [],
+  catalogToolId: '',
+  defaultToolId: '',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -124,10 +127,7 @@ function renderSession() {
   $('req-key').checked = !!session.require_api_key;
   $('health-dot').style.background = (session.pool && session.pool.enabled > 0) ? 'var(--ok)' : 'var(--err)';
 
-  const models = session.models || [];
-  $('model-list').innerHTML = models.length
-    ? models.map((m) => `<div><b>${esc(m.id)}</b> — ${esc(m.name || '')}</div>`).join('')
-    : '<div>尚未設定模型</div>';
+  renderModels();
 }
 
 function renderChips(summary) {
@@ -344,6 +344,195 @@ $('btn-change-password').addEventListener('click', async () => {
     $('new-password').value = '';
     toast('密碼已更新', 'ok');
   } catch (err) { toast(err.message, 'err'); }
+});
+
+// ---------------------------------------------------------------- 模型
+
+// modelAliasBase 把上游名稱整理成能安全放進 URL 的模型名稱。
+function modelAliasBase(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '')
+    .toLowerCase();
+}
+
+function currentModels() {
+  return (state.session && state.session.models) || [];
+}
+
+// usedModelIds 回傳已經被用掉的對外模型名稱。
+function usedModelIds() {
+  const used = new Set();
+  for (const model of currentModels()) used.add(model.id.toLowerCase());
+  return used;
+}
+
+// addedUpstreamIds 回傳已經加入設定的「toolId/modelId」組合。
+function addedUpstreamIds() {
+  const added = new Set();
+  for (const model of currentModels()) added.add(`${model.tool_id}/${model.model_id}`);
+  return added;
+}
+
+// suggestModelId 以 nativeId 當作對外名稱，撞名時再加上變體標籤或序號。
+function suggestModelId(item, used) {
+  const base = modelAliasBase(item.native_id) || modelAliasBase(item.title) || 'model';
+  let candidate = base;
+  if (used.has(candidate)) {
+    const label = modelAliasBase(item.variant_label);
+    if (label) candidate = `${base}-${label}`;
+  }
+  const stem = candidate;
+  let index = 2;
+  while (used.has(candidate)) candidate = `${stem}-${index++}`;
+  return candidate;
+}
+
+function renderModels() {
+  const models = currentModels();
+  const container = $('model-list');
+  if (!models.length) {
+    container.innerHTML = '<div class="empty" style="padding:26px">尚未設定模型</div>';
+    return;
+  }
+
+  container.innerHTML = models.map((model) => `
+    <div class="model-row">
+      <code>${esc(model.id)}</code>
+      <span class="model-name">${esc(model.name || '')}</span>
+      <div class="spacer"></div>
+      <button class="btn btn-sm btn-danger" data-action="remove-model" data-id="${esc(model.id)}"${models.length <= 1 ? ' disabled' : ''}>移除</button>
+    </div>`).join('');
+
+  const toolIds = new Map();
+  for (const model of models) {
+    if (model.tool_id && !toolIds.has(model.tool_id)) toolIds.set(model.tool_id, model.name || model.id);
+  }
+  $('tool-ids').innerHTML = [...toolIds]
+    .map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`)
+    .join('');
+  if (!state.defaultToolId) state.defaultToolId = models[0].tool_id || '';
+}
+
+function openCatalogModal() {
+  if (!$('cat-tool').value) $('cat-tool').value = state.defaultToolId || '';
+  $('modal-catalog').classList.remove('hidden');
+  if (state.catalogToolId !== $('cat-tool').value.trim()) loadCatalog(false);
+}
+
+async function loadCatalog(refresh) {
+  const toolId = $('cat-tool').value.trim();
+  if (!toolId) {
+    toast('請先填寫 toolId', 'err');
+    $('cat-tool').focus();
+    return;
+  }
+
+  state.catalogToolId = toolId;
+  state.catalog = [];
+  $('cat-meta').textContent = '載入中…';
+  $('cat-list').innerHTML = '';
+  try {
+    const query = `tool_id=${encodeURIComponent(toolId)}${refresh ? '&refresh=1' : ''}`;
+    const data = await api('/api/models/catalog?' + query);
+    state.catalog = data.models || [];
+    renderCatalog();
+  } catch (err) {
+    $('cat-meta').textContent = '';
+    $('cat-list').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+function renderCatalog() {
+  const catalog = state.catalog || [];
+  const keyword = $('cat-search').value.trim().toLowerCase();
+  const showAll = $('cat-all').checked;
+  const used = usedModelIds();
+  const added = addedUpstreamIds();
+  const toolId = state.catalogToolId;
+
+  const items = catalog.filter((item) => {
+    if (!showAll && !item.available) return false;
+    if (!keyword) return true;
+    return `${item.title} ${item.native_id} ${item.platform}`.toLowerCase().includes(keyword);
+  });
+
+  $('cat-meta').textContent = `顯示 ${items.length} / ${catalog.length} 個模型`;
+  if (!items.length) {
+    $('cat-list').innerHTML = '<div class="empty">沒有符合的模型</div>';
+    return;
+  }
+
+  $('cat-list').innerHTML = items.map((item) => {
+    const already = added.has(`${toolId}/${item.id}`);
+    const tags = [];
+    if (item.has_tools) tags.push('工具');
+    if (item.has_vision) tags.push('視覺');
+    if (item.is_reasoning) tags.push('推理');
+    if (!item.available) tags.push('已下架');
+
+    const parts = [];
+    if (!already) parts.push(suggestModelId(item, used));
+    parts.push(item.native_id, item.platform, `${item.credit_price} 點`);
+    if (tags.length) parts.push(tags.join('、'));
+
+    return `
+      <div class="cat-item">
+        <div>
+          <div class="cat-title">${esc(item.title)}</div>
+          <div class="cat-sub">${esc(parts.join(' · '))}</div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn btn-sm ${already ? '' : 'btn-primary'}" data-add="${esc(item.id)}"${already ? ' disabled' : ''}>${already ? '已加入' : '加入'}</button>
+      </div>`;
+  }).join('');
+}
+
+$('btn-model-catalog').addEventListener('click', openCatalogModal);
+$('btn-cat-load').addEventListener('click', () => loadCatalog(false));
+$('btn-cat-refresh').addEventListener('click', () => loadCatalog(true));
+$('cat-search').addEventListener('input', renderCatalog);
+$('cat-all').addEventListener('change', renderCatalog);
+$('cat-tool').addEventListener('change', () => {
+  if ($('cat-tool').value.trim() !== state.catalogToolId) loadCatalog(false);
+});
+
+$('cat-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-add]');
+  if (!button) return;
+  const item = (state.catalog || []).find((model) => model.id === button.dataset.add);
+  if (!item) return;
+
+  const alias = suggestModelId(item, usedModelIds());
+  button.disabled = true;
+  try {
+    state.session = await api('/api/models', {
+      method: 'POST',
+      body: { id: alias, name: item.title, tool_id: state.catalogToolId, model_id: item.id },
+    });
+    renderSession();
+    renderCatalog();
+    toast(`已加入模型 ${alias}`, 'ok');
+  } catch (err) {
+    button.disabled = false;
+    toast(err.message, 'err');
+  }
+});
+
+$('model-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action="remove-model"]');
+  if (!button) return;
+  const id = button.dataset.id;
+  if (!confirm(`確定要移除模型「${id}」嗎？`)) return;
+  try {
+    state.session = await api(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    renderSession();
+    renderCatalog();
+    toast(`已移除模型 ${id}`, 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
 });
 
 // ---------------------------------------------------------------- 其他互動

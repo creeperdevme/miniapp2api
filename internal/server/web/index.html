@@ -239,6 +239,28 @@ summary::-webkit-details-marker { display: none; }
 summary::before { content: "›"; display: inline-block; margin-right: 6px; transition: transform .15s; }
 details[open] summary::before { transform: rotate(90deg); }
 
+/* ---------- 模型 ---------- */
+.modal-wide { max-width: 660px; }
+.model-list { display: flex; flex-direction: column; gap: 8px; }
+.model-row {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px;
+}
+.model-row code { background: none; border: 0; padding: 0; color: var(--green-ink); font-size: 12.5px; }
+.model-row .model-name { font-size: 12px; color: var(--muted); }
+.check-inline { display: flex; align-items: center; gap: 7px; margin: 0; white-space: nowrap; }
+.cat-meta { font-size: 12px; color: var(--muted); margin: 14px 0 8px; }
+.cat-list { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 14px; }
+.cat-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #f1f6f2; }
+.cat-item:last-child { border-bottom: 0; }
+.cat-item .cat-title { font-weight: 600; font-size: 13px; }
+.cat-item .cat-sub { font-size: 11.5px; color: var(--muted); word-break: break-all; }
+.cat-item .cat-tag {
+  font-size: 10.5px; color: var(--muted); background: var(--green-tint);
+  border: 1px solid #e2f2e9; border-radius: 999px; padding: 1px 8px; white-space: nowrap;
+}
+.modal p.hint code { padding: 1px 7px; font-size: 11.5px; white-space: nowrap; }
+
 /* ---------- 通知 ---------- */
 .toast { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 90; }
 .toast div {
@@ -360,7 +382,13 @@ details[open] summary::before { transform: rotate(90deg); }
       <button class="btn btn-sm" id="btn-reveal-key">顯示／隱藏金鑰</button>
     </div>
 
-    <details open>
+    <label>模型（對外開放的 OpenAI 模型名稱）</label>
+    <div id="model-list" class="model-list"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn btn-sm btn-primary" id="btn-model-catalog">＋ 從模型目錄新增</button>
+    </div>
+
+    <details>
       <summary>修改登入密碼</summary>
       <label for="cur-password">目前密碼</label>
       <input id="cur-password" type="password" autocomplete="current-password">
@@ -371,13 +399,36 @@ details[open] summary::before { transform: rotate(90deg); }
       </div>
     </details>
 
-    <details>
-      <summary>可用的模型</summary>
-      <div id="model-list" style="margin-top:12px;font-size:12.5px;color:var(--muted);line-height:2"></div>
-    </details>
-
     <div class="modal-actions">
       <button class="btn" type="button" data-close="modal-settings">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- 模型目錄 -->
+<div id="modal-catalog" class="overlay hidden">
+  <div class="modal modal-wide">
+    <h3>模型目錄</h3>
+    <p class="hint">清單來自 miniapps.ai 的 <code>/ai-models</code>，按「加入」就會寫進 <code>config.json</code>，之後用該名稱呼叫 <code>/v1</code> 即可。</p>
+
+    <label for="cat-tool">toolId（模型所屬的 MiniApp）</label>
+    <div class="row">
+      <input id="cat-tool" class="grow" type="text" list="tool-ids" spellcheck="false" placeholder="a109c325-fe40-4f50-a815-1bfac2ddb7bb">
+      <datalist id="tool-ids"></datalist>
+      <button class="btn btn-sm btn-primary" id="btn-cat-load">載入</button>
+      <button class="btn btn-sm" id="btn-cat-refresh">重新抓取</button>
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <input id="cat-search" class="grow" type="text" placeholder="搜尋名稱、nativeId 或平台">
+      <label class="check-inline" for="cat-all"><input id="cat-all" type="checkbox"> 顯示已下架</label>
+    </div>
+
+    <div class="cat-meta" id="cat-meta"></div>
+    <div class="cat-list" id="cat-list"></div>
+
+    <div class="modal-actions">
+      <button class="btn" type="button" data-close="modal-catalog">關閉</button>
     </div>
   </div>
 </div>

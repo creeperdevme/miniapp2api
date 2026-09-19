@@ -148,6 +148,106 @@ func TestDefaultsMergedIntoExistingConfig(t *testing.T) {
 	}
 }
 
+func TestAddAndRemoveModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 失敗：%v", err)
+	}
+
+	if err := cfg.AddModel(Model{ID: "minimax-m2", ToolID: "tool-1"}); err == nil {
+		t.Fatal("缺少 modelId 應該被拒絕")
+	}
+	if err := cfg.AddModel(Model{ID: "MiniMax M2", ToolID: "tool-1", ModelID: "model-1"}); err == nil {
+		t.Fatal("含空白的模型名稱應該被拒絕")
+	}
+	if err := cfg.AddModel(Model{ID: "minimax-m2", ToolID: "tool-1", ModelID: "model-1"}); err != nil {
+		t.Fatalf("AddModel 失敗：%v", err)
+	}
+	if len(cfg.ModelList()) != 5 {
+		t.Fatalf("應該有 5 個模型，得到 %d", len(cfg.ModelList()))
+	}
+
+	added := cfg.FindModel("MiniMax-M2")
+	if added.ModelID != "model-1" || added.Name != "minimax-m2" || added.Revision != 1 || added.Language != "zh" {
+		t.Fatalf("新增的模型沒有補上預設值：%+v", added)
+	}
+	if err := cfg.AddModel(Model{ID: "MiniMax-M2", ToolID: "tool-2", ModelID: "model-2"}); !errors.Is(err, ErrModelExists) {
+		t.Fatalf("重複的名稱應該回報 ErrModelExists，得到 %v", err)
+	}
+
+	// 自訂模型移除後不會被補回來。
+	if err := cfg.RemoveModel("minimax-m2"); err != nil {
+		t.Fatalf("RemoveModel 失敗：%v", err)
+	}
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("重新載入失敗：%v", err)
+	}
+	if len(reloaded.ModelList()) != 4 {
+		t.Fatalf("移除後應該剩下 4 個模型，得到 %d", len(reloaded.ModelList()))
+	}
+	if err := reloaded.RemoveModel("no-such-model"); !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("移除不存在的模型應該回報 ErrModelNotFound，得到 %v", err)
+	}
+}
+
+// 內建模型被移除後會記在 removed_models，重開也不會被自動補回來。
+func TestRemovedModelsAreNotRestored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 失敗：%v", err)
+	}
+	if err := cfg.RemoveModel("gpt-5.6-luna"); err != nil {
+		t.Fatalf("RemoveModel 失敗：%v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("讀取設定檔失敗：%v", err)
+	}
+	if !containsText(string(data), "removed_models") {
+		t.Fatal("移除內建模型後應該寫入 removed_models")
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("重新載入失敗：%v", err)
+	}
+	if len(reloaded.ModelList()) != 3 {
+		t.Fatalf("內建模型不應該被補回來，得到 %d 個模型", len(reloaded.ModelList()))
+	}
+	for _, model := range reloaded.ModelList() {
+		if model.ID == "gpt-5.6-luna" {
+			t.Fatal("gpt-5.6-luna 應該維持移除狀態")
+		}
+	}
+
+	// 重新加入同名模型後，removed_models 的記錄要被清掉。
+	if err := reloaded.AddModel(DefaultModels()[3]); err != nil {
+		t.Fatalf("重新加入失敗：%v", err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatalf("重新載入失敗：%v", err)
+	}
+	if len(again.ModelList()) != 4 {
+		t.Fatalf("重新加入後應該有 4 個模型，得到 %d", len(again.ModelList()))
+	}
+
+	// 至少要保留一個模型。
+	for len(again.ModelList()) > 1 {
+		models := again.ModelList()
+		if err := again.RemoveModel(models[0].ID); err != nil {
+			t.Fatalf("RemoveModel(%s) 失敗：%v", models[0].ID, err)
+		}
+	}
+	if err := again.RemoveModel(again.ModelList()[0].ID); !errors.Is(err, ErrLastModel) {
+		t.Fatalf("移除最後一個模型應該回報 ErrLastModel，得到 %v", err)
+	}
+}
+
 func containsText(haystack, needle string) bool {
 	return len(needle) > 0 && len(haystack) >= len(needle) && (func() bool {
 		for i := 0; i+len(needle) <= len(haystack); i++ {

@@ -31,11 +31,12 @@ const (
 
 // Server 是 miniapp2api 的 HTTP 伺服器。
 type Server struct {
-	cfg  *config.Config
-	pool *store.Store
-	log  *log.Logger
-	sess *sessionStore
-	mux  *http.ServeMux
+	cfg     *config.Config
+	pool    *store.Store
+	log     *log.Logger
+	sess    *sessionStore
+	catalog *catalogCache
+	mux     *http.ServeMux
 }
 
 // New 建立伺服器並註冊所有路由。
@@ -44,11 +45,12 @@ func New(cfg *config.Config, pool *store.Store, logger *log.Logger) *Server {
 		logger = log.Default()
 	}
 	s := &Server{
-		cfg:  cfg,
-		pool: pool,
-		log:  logger,
-		sess: newSessionStore(sessionTTL),
-		mux:  http.NewServeMux(),
+		cfg:     cfg,
+		pool:    pool,
+		log:     logger,
+		sess:    newSessionStore(sessionTTL),
+		catalog: newCatalogCache(),
+		mux:     http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -69,6 +71,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/accounts/{id}", s.auth(s.handleDeleteAccount))
 	s.mux.HandleFunc("POST /api/accounts/{id}/check", s.auth(s.handleCheckAccount))
 	s.mux.HandleFunc("PUT /api/settings", s.auth(s.handleUpdateSettings))
+	s.mux.HandleFunc("GET /api/models/catalog", s.auth(s.handleModelCatalog))
+	s.mux.HandleFunc("POST /api/models", s.auth(s.handleCreateModel))
+	s.mux.HandleFunc("DELETE /api/models/{id}", s.auth(s.handleDeleteModel))
 
 	s.mux.HandleFunc("GET /v1/models", s.v1Auth(s.handleModels))
 	s.mux.HandleFunc("GET /v1/models/{id}", s.v1Auth(s.handleModel))
@@ -293,6 +298,216 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		s.log.Printf("登入密碼已變更")
 	}
 
+	writeJSON(w, http.StatusOK, s.sessionPayload(true))
+}
+
+// ---------------------------------------------------------------------------
+// 模型目錄
+// ---------------------------------------------------------------------------
+
+// catalogTTL 是模型目錄的快取時間；目錄一次要抓三百多筆而且很少變動。
+const catalogTTL = 10 * time.Minute
+
+// errNoCatalogAccount 表示號池中沒有帳號可以讀取模型目錄。
+var errNoCatalogAccount = errors.New("號池中沒有可用的帳號，無法讀取模型目錄")
+
+type catalogEntry struct {
+	models    []miniapps.AIModel
+	fetchedAt time.Time
+}
+
+type catalogCache struct {
+	mu      sync.Mutex
+	entries map[string]catalogEntry
+}
+
+func newCatalogCache() *catalogCache {
+	return &catalogCache{entries: map[string]catalogEntry{}}
+}
+
+func (c *catalogCache) get(toolID string) ([]miniapps.AIModel, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[toolID]
+	if !ok || time.Since(entry.fetchedAt) > catalogTTL {
+		return nil, false
+	}
+	return entry.models, true
+}
+
+func (c *catalogCache) put(toolID string, models []miniapps.AIModel) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[toolID] = catalogEntry{models: models, fetchedAt: time.Now()}
+}
+
+// catalogModel 是給網頁介面使用的模型目錄項目。
+type catalogModel struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	NativeID     string `json:"native_id"`
+	Platform     string `json:"platform"`
+	Type         string `json:"type"`
+	CreditPrice  int    `json:"credit_price"`
+	VariantLabel string `json:"variant_label,omitempty"`
+	HasTools     bool   `json:"has_tools"`
+	HasVision    bool   `json:"has_vision"`
+	IsReasoning  bool   `json:"is_reasoning"`
+	Available    bool   `json:"available"`
+}
+
+// handleModelCatalog 讀取上游 /ai-models 的模型目錄（只讀取，不消耗 AI 額度）。
+//
+// 目錄每個 toolId 有三百多筆而且很少變動，因此會快取；
+// 要忽略快取重新抓取時帶上 ?refresh=1。
+func (s *Server) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
+	toolID := strings.TrimSpace(r.URL.Query().Get("tool_id"))
+	if toolID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 tool_id 參數"})
+		return
+	}
+
+	models, fromCache := s.catalog.get(toolID)
+	if !fromCache || r.URL.Query().Get("refresh") != "" {
+		fetched, err := s.fetchCatalog(r.Context(), toolID)
+		if err != nil {
+			status := http.StatusBadGateway
+			if errors.Is(err, errNoCatalogAccount) {
+				status = http.StatusServiceUnavailable
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		s.catalog.put(toolID, fetched)
+		models, fromCache = fetched, false
+	}
+
+	list := make([]catalogModel, 0, len(models))
+	for _, model := range models {
+		list = append(list, catalogModel{
+			ID:           model.ID,
+			Title:        model.Title,
+			NativeID:     model.NativeID,
+			Platform:     model.PlatformID,
+			Type:         model.Type,
+			CreditPrice:  model.CreditPrice,
+			VariantLabel: model.VariantLabel,
+			HasTools:     model.HasTools,
+			HasVision:    model.HasVision,
+			IsReasoning:  model.IsReasoning,
+			Available:    model.Enabled && model.IsVisible && !model.IsDown,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tool_id": toolID,
+		"cached":  fromCache,
+		"total":   len(list),
+		"models":  list,
+	})
+}
+
+// fetchCatalog 用號池中第一個可用的帳號讀取模型目錄。
+func (s *Server) fetchCatalog(ctx context.Context, toolID string) ([]miniapps.AIModel, error) {
+	account, ok := s.catalogAccount()
+	if !ok {
+		return nil, errNoCatalogAccount
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	client := miniapps.New(miniapps.Credentials{
+		JWT:        account.JWT,
+		CSRFCookie: account.CSRFCookie,
+		CSRFToken:  account.CSRFToken,
+		ToolID:     toolID,
+	})
+
+	// 目錄比較大，上游偶爾會傳到一半就斷線，因此容許重試一次。
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		models, err := client.AIModels(ctx, toolID)
+		if err == nil {
+			return models, nil
+		}
+		lastErr = err
+		if miniapps.IsAuthError(err) || ctx.Err() != nil {
+			break
+		}
+	}
+	s.log.Printf("讀取模型目錄失敗：%v", lastErr)
+	return nil, lastErr
+}
+
+// catalogAccount 挑一個帳號來做唯讀查詢。
+//
+// 這裡刻意不用 pool.Pick，免得更新最後使用時間而影響號池的輪替順序。
+func (s *Server) catalogAccount() (store.Account, bool) {
+	for _, account := range s.pool.List() {
+		if !account.Enabled || account.CoolingDown() {
+			continue
+		}
+		if account.JWT == "" || account.CSRFCookie == "" {
+			continue
+		}
+		return account, true
+	}
+	return store.Account{}, false
+}
+
+// handleCreateModel 新增一個模型設定（對外名稱由呼叫方指定）。
+func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		ToolID   string `json:"tool_id"`
+		ModelID  string `json:"model_id"`
+		Revision int    `json:"revision"`
+		Language string `json:"language"`
+	}
+	if err := decodeJSON(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	model := config.Model{
+		ID:       payload.ID,
+		Name:     payload.Name,
+		ToolID:   payload.ToolID,
+		ModelID:  payload.ModelID,
+		Revision: payload.Revision,
+		Language: payload.Language,
+	}
+	switch err := s.cfg.AddModel(model); {
+	case errors.Is(err, config.ErrModelExists):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.log.Printf("已新增模型 %s（toolId %s / modelId %s）", model.ID, model.ToolID, model.ModelID)
+	writeJSON(w, http.StatusOK, s.sessionPayload(true))
+}
+
+// handleDeleteModel 移除一個模型設定。
+func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	switch err := s.cfg.RemoveModel(id); {
+	case errors.Is(err, config.ErrModelNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	case errors.Is(err, config.ErrLastModel):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.log.Printf("已移除模型 %s", id)
 	writeJSON(w, http.StatusOK, s.sessionPayload(true))
 }
 
