@@ -232,3 +232,74 @@ func TestLoadLegacyAccountFile(t *testing.T) {
 		}
 	}
 }
+
+// 額度不足的帳號應該排到候選順位的最後，沒有其他選擇時仍然可用。
+func TestQuotaExceededAccountPickedLast(t *testing.T) {
+	pool, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open 失敗：%v", err)
+	}
+
+	first, err := pool.Create(Account{JWT: testJWT(t), CSRFCookie: "c", CSRFToken: "t", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create 失敗：%v", err)
+	}
+	second, err := pool.Create(Account{JWT: testJWT(t), CSRFCookie: "c", CSRFToken: "t", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create 失敗：%v", err)
+	}
+
+	// 暖身：讓 second 剛被用過，first 成為最久未使用的帳號。
+	pool.MarkUsed(second.ID)
+
+	picked, err := pool.Pick(nil)
+	if err != nil {
+		t.Fatalf("Pick 失敗：%v", err)
+	}
+	if picked.ID != first.ID {
+		t.Fatalf("暖身挑選應該挑到最久未使用的 first，得到 %s", picked.ID)
+	}
+
+	// first 額度不足後，即使它最久未使用，也應該讓 second 優先。
+	pool.MarkQuotaExceeded(first.ID)
+	pool.MarkUsed(second.ID)
+
+	picked, err = pool.Pick(nil)
+	if err != nil {
+		t.Fatalf("Pick 失敗：%v", err)
+	}
+	if picked.ID != second.ID {
+		t.Fatalf("額度不足的帳號應該被排到最後，得到 %s", picked.ID)
+	}
+
+	// 沒有其他選擇時，額度不足的帳號仍然可以被挑中（不是被停用）。
+	picked, err = pool.Pick(map[string]bool{second.ID: true})
+	if err != nil {
+		t.Fatalf("額度不足的帳號不應該被停用：%v", err)
+	}
+	if picked.ID != first.ID {
+		t.Fatalf("應該挑到 first，得到 %s", picked.ID)
+	}
+}
+
+// 帳號恢復正常後，額度不足的標記應該要清除。
+func TestSuccessfulRecordClearsQuotaExceeded(t *testing.T) {
+	pool, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open 失敗：%v", err)
+	}
+	account, err := pool.Create(Account{JWT: testJWT(t), CSRFCookie: "c", CSRFToken: "t", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create 失敗：%v", err)
+	}
+
+	pool.MarkQuotaExceeded(account.ID)
+	if stored, _ := pool.Get(account.ID); !stored.QuotaExceeded() {
+		t.Fatal("標記之後應該要處於額度不足狀態")
+	}
+
+	pool.Record(account.ID, nil, CooldownDuration)
+	if stored, _ := pool.Get(account.ID); stored.QuotaExceeded() {
+		t.Fatal("成功之後應該要清除額度不足標記")
+	}
+}

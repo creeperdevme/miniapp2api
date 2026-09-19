@@ -137,6 +137,7 @@ function renderChips(summary) {
     ['啟用中', data.enabled || 0],
     ['停用', data.disabled || 0],
     ['冷卻中', data.cooldown || 0],
+    ['額度不足', data.quota || 0],
     ['JWT 過期', data.expired || 0],
     ['請求數', data.requests || 0],
     ['成功', data.success || 0],
@@ -161,6 +162,9 @@ function accountBadges(account) {
 
   if (account.cooling_down) {
     badges.push('<span class="badge warn">冷卻中</span>');
+  }
+  if (account.quota_exceeded) {
+    badges.push('<span class="badge err">額度不足</span>');
   }
   const left = daysLeft(account.expires_at);
   if (left !== null) {

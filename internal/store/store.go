@@ -22,6 +22,13 @@ const (
 
 	// CooldownDuration 是帳號發生錯誤後的冷卻時間。
 	CooldownDuration = 60 * time.Second
+
+	// QuotaWindow 是帳號額度不足後，被排到候選順位最後的時間長度。
+	//
+	// 額度不足通常只代表「這個帳號沒額度」而不是帳號失效，
+	// 讓它冷卻會連帶使其他模型一起不能用，因此不冷卻；
+	// 改成只把它排到候選順位的最後，期限過後自動回到正常順位。
+	QuotaWindow = 10 * time.Minute
 )
 
 // ErrNotFound 表示找不到指定的帳號。
@@ -53,9 +60,10 @@ type Account struct {
 	Stats      Stats  `json:"stats"`
 
 	// 以下為執行期狀態，不會寫入檔案。
-	LastError     string    `json:"-"`
-	LastErrorAt   string    `json:"-"`
-	CooldownUntil time.Time `json:"-"`
+	LastError       string    `json:"-"`
+	LastErrorAt     string    `json:"-"`
+	CooldownUntil   time.Time `json:"-"`
+	QuotaExceededAt time.Time `json:"-"`
 }
 
 // LastUsed 回傳最後使用時間，未曾使用時回傳零值。
@@ -81,6 +89,11 @@ func (a Account) CoolingDown() bool {
 	return !a.CooldownUntil.IsZero() && time.Now().Before(a.CooldownUntil)
 }
 
+// QuotaExceeded 回報帳號是否因為額度不足而被排到候選順位的最後。
+func (a Account) QuotaExceeded() bool {
+	return !a.QuotaExceededAt.IsZero() && time.Since(a.QuotaExceededAt) < QuotaWindow
+}
+
 // DisplayName 回傳用來顯示的名稱。
 func (a Account) DisplayName() string {
 	if strings.TrimSpace(a.Name) != "" {
@@ -103,18 +116,20 @@ func (a Account) Redacted() Account {
 // View 是給網頁介面使用的帳號資料（已遮蔽敏感欄位並附上執行期狀態）。
 type View struct {
 	Account
-	CoolingDown bool   `json:"cooling_down"`
-	LastError   string `json:"last_error,omitempty"`
-	LastErrorAt string `json:"last_error_at,omitempty"`
+	CoolingDown   bool   `json:"cooling_down"`
+	QuotaExceeded bool   `json:"quota_exceeded"`
+	LastError     string `json:"last_error,omitempty"`
+	LastErrorAt   string `json:"last_error_at,omitempty"`
 }
 
 // View 產生網頁介面用的資料。
 func (a Account) View() View {
 	return View{
-		Account:     a.Redacted(),
-		CoolingDown: a.CoolingDown(),
-		LastError:   a.LastError,
-		LastErrorAt: a.LastErrorAt,
+		Account:       a.Redacted(),
+		CoolingDown:   a.CoolingDown(),
+		QuotaExceeded: a.QuotaExceeded(),
+		LastError:     a.LastError,
+		LastErrorAt:   a.LastErrorAt,
 	}
 }
 
@@ -323,6 +338,7 @@ func (s *Store) Record(id string, requestErr error, cooldown time.Duration) {
 		acc.LastError = ""
 		acc.LastErrorAt = ""
 		acc.CooldownUntil = time.Time{}
+		acc.QuotaExceededAt = time.Time{}
 	} else {
 		acc.Stats.Failed++
 		acc.LastError = requestErr.Error()
@@ -332,6 +348,19 @@ func (s *Store) Record(id string, requestErr error, cooldown time.Duration) {
 		}
 	}
 	_ = s.saveLocked(acc)
+}
+
+// MarkQuotaExceeded 記錄帳號因為額度不足而失敗。
+//
+// 這只會讓帳號在挑選時排到最後，並不會停用帳號；
+// 其他還有額度的帳號會優先被選到，全部都沒額度時仍會輪到它。
+func (s *Store) MarkQuotaExceeded(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if acc, ok := s.accounts[id]; ok {
+		acc.QuotaExceededAt = time.Now()
+	}
 }
 
 // MarkUsed 標記帳號剛被選用（僅更新記憶體狀態）。
@@ -377,6 +406,9 @@ func (s *Store) Pick(exclude map[string]bool) (Account, error) {
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {
+		if left, right := candidates[i].QuotaExceeded(), candidates[j].QuotaExceeded(); left != right {
+			return !left
+		}
 		left, right := candidates[i].LastUsed(), candidates[j].LastUsed()
 		if !left.Equal(right) {
 			return left.Before(right)
@@ -407,6 +439,9 @@ func (s *Store) Summary() map[string]int64 {
 		}
 		if acc.CoolingDown() {
 			summary["cooldown"]++
+		}
+		if acc.QuotaExceeded() {
+			summary["quota"]++
 		}
 		if acc.Expired() {
 			summary["expired"]++

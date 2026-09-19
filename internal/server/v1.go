@@ -204,10 +204,11 @@ func (s *Server) streamCompletion(
 
 	if outcome.err != nil {
 		s.log.Printf("串流請求失敗：%v", outcome.err)
+		_, kind, code := upstreamError(outcome.err)
 		payload, _ := json.Marshal(openai.ErrorResponse{Error: openai.ErrorDetail{
 			Message: outcome.err.Error(),
-			Type:    "server_error",
-			Code:    "upstream_error",
+			Type:    kind,
+			Code:    code,
 		}})
 		fmt.Fprintf(w, "data: %s\n\n", payload)
 		fmt.Fprint(w, "data: [DONE]\n\n")
@@ -255,6 +256,9 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 		client := miniapps.New(credentialsFor(account, model))
 		answer, conversationID, err := client.Ask(ctx, prompt, s.cfg.Timeout())
 		s.pool.Record(account.ID, err, cooldownFor(err))
+		if miniapps.IsQuotaError(err) {
+			s.pool.MarkQuotaExceeded(account.ID)
+		}
 
 		if err != nil {
 			lastErr = err
@@ -282,8 +286,9 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 
 // cooldownFor 決定這次錯誤要讓帳號冷卻多久。
 //
-// 額度不足（402／412）通常代表「這個模型沒額度」而不是帳號失效，
-// 若讓帳號冷卻會連帶讓其他模型一起不能用，因此不冷卻。
+// 額度不足（402／412）通常代表「這個帳號沒額度」而不是帳號失效，
+// 若讓帳號冷卻會連帶讓其他模型一起不能用，因此不冷卻；
+// 改由 MarkQuotaExceeded 把它排到候選順位的最後。
 func cooldownFor(err error) time.Duration {
 	if err == nil || miniapps.IsQuotaError(err) {
 		return 0
