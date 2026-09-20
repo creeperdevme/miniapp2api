@@ -15,6 +15,7 @@
   - [Windows](#windows)
   - [Linux](#linux)
   - [從原始碼建置](#從原始碼建置)
+  - [自動建置](#自動建置)
 - [第一次啟動](#第一次啟動)
 - [新增帳號](#新增帳號)
 - [呼叫 OpenAI API](#呼叫-openai-api)
@@ -184,6 +185,14 @@ go build -o miniapp2api .          # Windows 請用 -o miniapp2api.exe
 GOOS=windows GOARCH=amd64 go build -o miniapp2api.exe .
 GOOS=linux   GOARCH=arm64 go build -o miniapp2api-linux-arm64 .
 ```
+
+### 自動建置
+
+`build/build-windows.bat`提供windows編譯
+
+`build/build-linux.bat`提供Linux編譯環境
+
+`bin/`儲存編譯的結果
 
 ### 命令列參數
 

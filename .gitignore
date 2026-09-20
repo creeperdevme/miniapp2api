@@ -6,6 +6,7 @@ miniapp2api.exe
 # 本機執行資料（含密碼雜湊、API 金鑰、帳號 JWT／CSRF）
 config.json
 auths/
+bin/*
 
 # 日誌與暫存
 *.log
