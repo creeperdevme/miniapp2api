@@ -52,4 +52,6 @@ jobs:
         with:
           node-version: 20
       - name: 檢查前端語法
-        run: node --check internal/server/web/app.js
+        run: |
+          node --check internal/server/web/app.js
+          node --check internal/server/web/i18n.js

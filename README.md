@@ -28,10 +28,11 @@
 - OpenAI 相容端點：`GET /v1/models`、`POST /v1/chat/completions`（支援 `stream`）。
 - 網頁管理介面：號池清單與統計、模型管理、API 金鑰管理、登入密碼變更。
 - 帳號有兩種新增方式：貼上 **JWT**，或填 **Email + 密碼** 讓中轉自己登入換一組 JWT。
+- 網頁介面可切換 **繁體中文／English**（右上角），console 輸出固定為英文。
 - **CSRF 全自動**：需要 CSRF 的請求會自動向 `/auth/csrf` 取得配對，不用手動抓 Cookie 與標頭。
 - **JWT 自動續期**：帳號有存密碼時，JWT 剩不到 3 天會自動重新登入換新，也可以隨時手動按「續期」。
 - 自動挑選最久未使用的啟用帳號；失敗的帳號會進入冷卻，本次請求自動換下一個帳號重試。
-- 管理密碼以 PBKDF2-HMAC-SHA256 保存（不存明文），API 金鑰只在產生時顯示一次。
+- 管理密碼以 PBKDF2-HMAC-SHA256 保存（不存明文）；API 金鑰只在網頁介面顯示一次，不會印在 console。
 
 ## 安裝
 
@@ -61,7 +62,7 @@
    .\miniapp2api.exe
    ```
 
-3. 首次啟動會在 console 印出 API 金鑰，並自動開啟瀏覽器（加 `-no-browser` 可關閉）。
+3. 啟動後會自動開啟瀏覽器（加 `-no-browser` 可關閉）；console 會顯示資料目錄、網址與號池數量，**不會印出 API 金鑰**。
 4. 如果跳出 Windows SmartScreen 警告，選「更多資訊」→「仍要執行」。
 
 常用參數：
@@ -198,11 +199,13 @@ GOOS=linux   GOARCH=arm64 go build -o miniapp2api-linux-arm64 .
 2. 第一次會要求**設定管理密碼**（至少 6 個字元），設定後直接登入。
 3. 登入後就是 **號池** 頁面，上方會顯示 `Base URL` 與 `API 金鑰`。
 
-   > API 金鑰只在產生時顯示一次（console 與網頁都是）。
+   > API 金鑰只在網頁介面顯示一次（首次設定完成、或按「重新產生 API 金鑰」時）。
    > 之後要查看只能到右上角 **設定** 按「重新產生 API 金鑰」，舊金鑰會立即失效。
    > 還沒複製就走掉了也別緊張：重新產生一組即可。
 
 4. 此時模型清單是空的，先到 **設定 → ＋ 從模型目錄新增** 加入至少一個模型，`/v1` 才能用。
+
+右上角的 **中文 / English** 可以隨時切換介面語言，選擇會存在瀏覽器裡；console 的訊息一律是英文。
 
 ## 新增帳號
 
@@ -391,7 +394,7 @@ internal/store/              auths/{email}.json 號池
 internal/miniapps/           api.miniapps.ai 用戶端（CSRF、登入、送出訊息、解析回應）
 internal/openai/             OpenAI 相容格式與訊息轉換
 internal/server/             HTTP 路由、網頁介面、/v1 端點
-internal/server/web/         網頁介面（index.html / app.js，用 go:embed 包進執行檔）
+internal/server/web/         網頁介面（index.html / app.js / i18n.js，用 go:embed 包進執行檔）
 .github/workflows/ci.yml     推送與 PR 時跑格式檢查、vet、測試與雙平台建置
 .github/workflows/release.yml 打 tag 時建置 Windows／Linux 執行檔並發 Release
 ```

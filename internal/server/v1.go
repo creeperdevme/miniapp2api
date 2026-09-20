@@ -28,13 +28,13 @@ func (s *Server) v1Auth(next http.HandlerFunc) http.HandlerFunc {
 		key := bearerToken(r)
 		if key == "" {
 			writeAPIError(w, http.StatusUnauthorized,
-				"缺少 API 金鑰，請在 Authorization 標頭帶上 Bearer <key>。",
+				"missing API key; send it as: Authorization: Bearer <key>",
 				"invalid_request_error", "missing_api_key")
 			return
 		}
 		if !s.cfg.CheckKey(key) {
 			writeAPIError(w, http.StatusUnauthorized,
-				"API 金鑰錯誤。",
+				"invalid API key",
 				"invalid_request_error", "invalid_api_key")
 			return
 		}
@@ -59,7 +59,7 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeAPIError(w, http.StatusNotFound, fmt.Sprintf("找不到模型 %q。", id), "invalid_request_error", "model_not_found")
+	writeAPIError(w, http.StatusNotFound, fmt.Sprintf("model %q not found", id), "invalid_request_error", "model_not_found")
 }
 
 func modelInfo(model config.Model) openai.ModelInfo {
@@ -79,20 +79,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(request.Messages) == 0 && strings.TrimSpace(request.Prompt) == "" {
-		writeAPIError(w, http.StatusBadRequest, "缺少 messages 欄位。", "invalid_request_error", "missing_messages")
+		writeAPIError(w, http.StatusBadRequest, "missing required field: messages", "invalid_request_error", "missing_messages")
 		return
 	}
 
 	prompt := request.BuildPrompt()
 	if prompt == "" {
-		writeAPIError(w, http.StatusBadRequest, "messages 中沒有可送出的文字內容。", "invalid_request_error", "empty_prompt")
+		writeAPIError(w, http.StatusBadRequest, "messages contains no text content to send", "invalid_request_error", "empty_prompt")
 		return
 	}
 
 	model := s.cfg.FindModel(request.Model)
 	if model.ModelID == "" {
 		writeAPIError(w, http.StatusServiceUnavailable,
-			"尚未加入任何模型，請先在網頁介面的「模型」區塊加入模型。",
+			"no model configured; add one in the Web UI under Models",
 			"invalid_request_error", "no_model_configured")
 		return
 	}
@@ -107,7 +107,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	answer, account, err := s.complete(r.Context(), model, prompt)
 	if err != nil {
 		status, kind, code := upstreamError(err)
-		s.log.Printf("請求失敗：%v", err)
+		s.log.Printf("request failed: %v", err)
 		writeAPIError(w, status, err.Error(), kind, code)
 		return
 	}
@@ -143,7 +143,7 @@ func (s *Server) streamCompletion(
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "此連線不支援串流回應。", "server_error", "stream_unsupported")
+		writeAPIError(w, http.StatusInternalServerError, "this connection does not support streaming responses", "server_error", "stream_unsupported")
 		return
 	}
 
@@ -209,7 +209,7 @@ func (s *Server) streamCompletion(
 	}
 
 	if outcome.err != nil {
-		s.log.Printf("串流請求失敗：%v", outcome.err)
+		s.log.Printf("stream request failed: %v", outcome.err)
 		_, kind, code := upstreamError(outcome.err)
 		payload, _ := json.Marshal(openai.ErrorResponse{Error: openai.ErrorDetail{
 			Message: outcome.err.Error(),
@@ -264,7 +264,7 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 			if renewed, err := s.renewAccount(ctx, account); err == nil {
 				account = renewed
 			} else {
-				s.log.Printf("帳號 %s 自動續期失敗：%v", account.DisplayName(), err)
+				s.log.Printf("account %s auto-renew failed: %v", account.DisplayName(), err)
 			}
 		}
 
@@ -280,19 +280,19 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 
 		if err != nil {
 			lastErr = err
-			s.log.Printf("帳號 %s 失敗：%v", account.DisplayName(), err)
+			s.log.Printf("account %s failed: %v", account.DisplayName(), err)
 			if ctx.Err() != nil {
 				break
 			}
 			continue
 		}
 		if strings.TrimSpace(answer) == "" {
-			lastErr = errors.New("上游回覆為空")
-			s.log.Printf("帳號 %s 回覆為空（對話 %s）", account.DisplayName(), conversationID)
+			lastErr = errors.New("upstream returned an empty reply")
+			s.log.Printf("account %s returned an empty reply (conversation %s)", account.DisplayName(), conversationID)
 			continue
 		}
 
-		s.log.Printf("帳號 %s 完成（對話 %s，%d 字）", account.DisplayName(), conversationID, len([]rune(answer)))
+		s.log.Printf("account %s finished (conversation %s, %d chars)", account.DisplayName(), conversationID, len([]rune(answer)))
 		return answer, account, nil
 	}
 

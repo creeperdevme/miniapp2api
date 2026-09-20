@@ -3,6 +3,7 @@
 const state = {
   session: null,
   accounts: [],
+  summary: null,
   editing: null,
   timer: null,
   catalog: [],
@@ -33,9 +34,15 @@ async function api(path, options = {}) {
   }
   if (!res.ok) {
     const detail = data && data.error;
-    const message = typeof detail === 'string' ? detail : (detail && detail.message) || `HTTP ${res.status}`;
-    const error = new Error(message);
+    let message;
+    if (typeof detail === 'string') message = detail;
+    else if (detail && detail.message) message = detail.message;
+    else message = `HTTP ${res.status}`;
+    // 伺服器會帶上穩定的 code，前端據此顯示對應語系的訊息。
+    const code = (data && data.code) || (detail && detail.code) || '';
+    const error = new Error(code ? tOr('err.' + code, { message }, message) : message);
     error.status = res.status;
+    error.code = code;
     throw error;
   }
   return data;
@@ -80,7 +87,7 @@ async function init() {
     if (!session.logged_in) { show('login'); return; }
     await enterDashboard();
   } catch (err) {
-    toast('無法連線到伺服器：' + err.message, 'err');
+    toast(t('toast.connectFailed', { message: err.message }), 'err');
     show('login');
   }
 }
@@ -130,16 +137,17 @@ function showFreshKey(key) {
 
 function renderChips(summary) {
   const data = summary || {};
+  state.summary = data;
   const chips = [
-    ['帳號總數', data.total || 0],
-    ['啟用中', data.enabled || 0],
-    ['停用', data.disabled || 0],
-    ['冷卻中', data.cooldown || 0],
-    ['額度不足', data.quota || 0],
-    ['JWT 過期', data.expired || 0],
-    ['請求數', data.requests || 0],
-    ['成功', data.success || 0],
-    ['失敗', data.failed || 0],
+    [t('chip.total'), data.total || 0],
+    [t('chip.enabled'), data.enabled || 0],
+    [t('chip.disabled'), data.disabled || 0],
+    [t('chip.cooldown'), data.cooldown || 0],
+    [t('chip.quota'), data.quota || 0],
+    [t('chip.expired'), data.expired || 0],
+    [t('chip.requests'), data.requests || 0],
+    [t('chip.success'), data.success || 0],
+    [t('chip.failed'), data.failed || 0],
   ];
   $('stat-chips').innerHTML = chips.map(([label, value]) => `<span class="chip">${esc(label)} <b>${esc(value)}</b></span>`).join('');
 }
@@ -155,24 +163,26 @@ async function refreshAccounts() {
 
 function accountBadges(account) {
   const badges = [];
-  if (account.enabled) badges.push('<span class="badge ok">啟用</span>');
-  else badges.push('<span class="badge">停用</span>');
+  if (account.enabled) badges.push(`<span class="badge ok">${esc(t('badge.enabled'))}</span>`);
+  else badges.push(`<span class="badge">${esc(t('badge.disabled'))}</span>`);
 
   if (account.cooling_down) {
-    badges.push('<span class="badge warn">冷卻中</span>');
+    badges.push(`<span class="badge warn">${esc(t('badge.cooldown'))}</span>`);
   }
   if (account.quota_exceeded) {
     const models = account.quota_models || [];
-    const title = models.length ? ` title="額度不足的模型：${esc(models.join('、'))}"` : '';
-    badges.push(`<span class="badge err"${title}>額度不足</span>`);
+    const title = models.length
+      ? ` title="${esc(t('badge.quotaTitle', { models: models.join(t('list.separator')) }))}"`
+      : '';
+    badges.push(`<span class="badge err"${title}>${esc(t('badge.quota'))}</span>`);
   }
   const left = daysLeft(account.expires_at);
   if (left !== null) {
-    if (left < 0) badges.push('<span class="badge err">JWT 已過期</span>');
-    else if (left <= 3) badges.push(`<span class="badge warn">JWT 剩 ${left} 天</span>`);
+    if (left < 0) badges.push(`<span class="badge err">${esc(t('badge.expired'))}</span>`);
+    else if (left <= 3) badges.push(`<span class="badge warn">${esc(t('badge.expiring', { days: left }))}</span>`);
   }
   if (account.password) {
-    badges.push('<span class="badge ok" title="已設定密碼，JWT 快到期時會自動重新登入">自動續期</span>');
+    badges.push(`<span class="badge ok" title="${esc(t('badge.autoRenewTitle'))}">${esc(t('badge.autoRenew'))}</span>`);
   }
   return badges.join(' ');
 }
@@ -181,36 +191,37 @@ function renderAccounts() {
   const container = $('accounts');
   if (!state.accounts.length) {
     container.className = '';
-    container.innerHTML = '<div class="empty">號池是空的，點選右上角「＋ 新增帳號」加入一組 JWT 即可。</div>';
+    container.innerHTML = `<div class="empty">${esc(t('pool.empty'))}</div>`;
     return;
   }
   container.className = 'grid';
   container.innerHTML = state.accounts.map((account) => {
     const stats = account.stats || {};
+    const left = daysLeft(account.expires_at);
     const expiry = account.expires_at
-      ? `${fmtTime(account.expires_at)}${daysLeft(account.expires_at) !== null ? `（剩 ${daysLeft(account.expires_at)} 天）` : ''}`
+      ? (left !== null ? t('kv.expiresValue', { time: fmtTime(account.expires_at), days: left }) : fmtTime(account.expires_at))
       : '-';
     const errLine = account.last_error ? `<div class="err-line">${esc(account.last_error)}</div>` : '';
 
     return `
       <div class="acct ${account.enabled ? '' : 'off'}">
         <div class="acct-top">
-          <div class="acct-name">${esc(account.name || account.email || '未命名帳號')}</div>
+          <div class="acct-name">${esc(account.name || account.email || t('account.unnamed'))}</div>
           <div class="spacer"></div>
           ${accountBadges(account)}
         </div>
         <div class="acct-id">${esc(account.email || account.id)} · auths/${esc(account.file_name || '')}</div>
-        <div class="kv"><span>JWT</span><span>${esc(account.jwt || '-')}</span></div>
-        <div class="kv"><span>JWT 到期</span><span>${esc(expiry)}</span></div>
-        <div class="kv"><span>使用次數</span><span>${esc(stats.requests || 0)} 次（成功 ${esc(stats.success || 0)}／失敗 ${esc(stats.failed || 0)}）</span></div>
-        <div class="kv"><span>最後使用</span><span>${esc(fmtTime(account.last_used_at))}</span></div>
+        <div class="kv"><span>${esc(t('kv.jwt'))}</span><span>${esc(account.jwt || '-')}</span></div>
+        <div class="kv"><span>${esc(t('kv.expires'))}</span><span>${esc(expiry)}</span></div>
+        <div class="kv"><span>${esc(t('kv.requests'))}</span><span>${esc(t('kv.requestsValue', { total: stats.requests || 0, success: stats.success || 0, failed: stats.failed || 0 }))}</span></div>
+        <div class="kv"><span>${esc(t('kv.lastUsed'))}</span><span>${esc(fmtTime(account.last_used_at))}</span></div>
         ${errLine}
         <div class="acct-actions">
-          <button class="btn btn-sm" data-action="check" data-id="${esc(account.id)}">測試</button>
-          ${account.password ? `<button class="btn btn-sm" data-action="renew" data-id="${esc(account.id)}">續期</button>` : ''}
-          <button class="btn btn-sm" data-action="edit" data-id="${esc(account.id)}">編輯</button>
-          <button class="btn btn-sm" data-action="toggle" data-id="${esc(account.id)}">${account.enabled ? '停用' : '啟用'}</button>
-          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${esc(account.id)}">刪除</button>
+          <button class="btn btn-sm" data-action="check" data-id="${esc(account.id)}">${esc(t('action.test'))}</button>
+          ${account.password ? `<button class="btn btn-sm" data-action="renew" data-id="${esc(account.id)}">${esc(t('action.renew'))}</button>` : ''}
+          <button class="btn btn-sm" data-action="edit" data-id="${esc(account.id)}">${esc(t('action.edit'))}</button>
+          <button class="btn btn-sm" data-action="toggle" data-id="${esc(account.id)}">${esc(account.enabled ? t('action.disable') : t('action.enable'))}</button>
+          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${esc(account.id)}">${esc(t('action.delete'))}</button>
         </div>
       </div>`;
   }).join('');
@@ -225,16 +236,16 @@ $('accounts').addEventListener('click', async (event) => {
 
   if (button.dataset.action === 'check') {
     button.disabled = true;
-    button.textContent = '測試中…';
+    button.textContent = t('action.testing');
     try {
       const result = await api(`/api/accounts/${id}/check`, { method: 'POST' });
-      if (result.ok) toast(`帳號可用，讀到 ${result.conversations} 筆對話`, 'ok');
-      else toast('測試失敗：' + result.error, 'err');
+      if (result.ok) toast(t('toast.testOk', { count: result.conversations }), 'ok');
+      else toast(t('toast.testFailed', { message: result.error }), 'err');
     } catch (err) {
-      toast('測試失敗：' + err.message, 'err');
+      toast(t('toast.testFailed', { message: err.message }), 'err');
     } finally {
       button.disabled = false;
-      button.textContent = '測試';
+      button.textContent = t('action.test');
       refreshAccounts().catch(() => {});
     }
     return;
@@ -244,15 +255,15 @@ $('accounts').addEventListener('click', async (event) => {
 
   if (button.dataset.action === 'renew') {
     button.disabled = true;
-    button.textContent = '續期中…';
+    button.textContent = t('action.renewing');
     try {
       const updated = await api(`/api/accounts/${id}/renew`, { method: 'POST' });
-      toast(`已重新登入，JWT 到期 ${fmtTime(updated.expires_at)}`, 'ok');
+      toast(t('toast.renewed', { time: fmtTime(updated.expires_at) }), 'ok');
     } catch (err) {
-      toast('續期失敗：' + err.message, 'err');
+      toast(t('toast.renewFailed', { message: err.message }), 'err');
     } finally {
       button.disabled = false;
-      button.textContent = '續期';
+      button.textContent = t('action.renew');
       refreshAccounts().catch(() => {});
     }
     return;
@@ -267,10 +278,11 @@ $('accounts').addEventListener('click', async (event) => {
   }
 
   if (button.dataset.action === 'delete') {
-    if (!confirm(`確定要刪除「${account.name || account.id}」嗎？此動作會移除 auths/${account.id}.json`)) return;
+    const name = account.name || account.id;
+    if (!confirm(t('confirm.deleteAccount', { name, file: `auths/${account.id}.json` }))) return;
     try {
       await api(`/api/accounts/${id}`, { method: 'DELETE' });
-      toast('已刪除帳號', 'ok');
+      toast(t('toast.accountDeleted'), 'ok');
       await refreshAccounts();
     } catch (err) { toast(err.message, 'err'); }
   }
@@ -278,14 +290,15 @@ $('accounts').addEventListener('click', async (event) => {
 
 // ---------------------------------------------------------------- 帳號表單
 
+// accountModes 描述兩種新增帳號模式要顯示的密碼欄位文案（i18n key）。
 const accountModes = {
   jwt: {
-    passwordLabel: '密碼（選填）',
-    passwordHint: '填寫後 JWT 快到期時會自動重新登入續期',
+    passwordLabel: 'account.passwordOptional',
+    passwordHint: 'account.passwordOptionalHint',
   },
   login: {
-    passwordLabel: '密碼',
-    passwordHint: 'miniapps.ai 的登入密碼',
+    passwordLabel: 'account.passwordRequired',
+    passwordHint: 'account.passwordLoginHint',
   },
 };
 
@@ -306,14 +319,20 @@ function setAccountMode(mode) {
   $('acct-email').required = !editing && login;
   $('acct-password').required = !editing && login;
 
-  $('acct-password-label').textContent = editing ? '密碼（選填）' : accountModes[mode].passwordLabel;
-  $('acct-password').placeholder = editing ? '留空表示不變更' : accountModes[mode].passwordHint;
+  const labelKey = editing ? 'account.passwordOptional' : accountModes[mode].passwordLabel;
+  const hintKey = editing ? 'account.passwordEditHint' : accountModes[mode].passwordHint;
+  $('acct-password-label').dataset.i18n = labelKey;
+  $('acct-password-label').textContent = t(labelKey);
+  $('acct-password').dataset.i18nPlaceholder = hintKey;
+  $('acct-password').placeholder = t(hintKey);
 }
 
 function openAccountModal(account) {
   state.editing = account || null;
   const editing = !!account;
-  $('account-title').textContent = editing ? '編輯帳號' : '新增帳號';
+  const titleKey = editing ? 'account.titleEdit' : 'account.titleAdd';
+  $('account-title').dataset.i18n = titleKey;
+  $('account-title').textContent = t(titleKey);
   $('acct-name').value = editing ? account.name || '' : '';
   $('acct-jwt').value = '';
   $('acct-email').value = '';
@@ -345,10 +364,10 @@ $('account-form').addEventListener('submit', async (event) => {
   try {
     if (state.editing) {
       await api(`/api/accounts/${state.editing.id}`, { method: 'PUT', body: payload });
-      toast('已更新帳號', 'ok');
+      toast(t('toast.accountUpdated'), 'ok');
     } else {
       await api('/api/accounts', { method: 'POST', body: payload });
-      toast(login ? '已登入並新增帳號' : '已新增帳號', 'ok');
+      toast(t(login ? 'toast.accountAddedViaLogin' : 'toast.accountAdded'), 'ok');
     }
     $('modal-account').classList.add('hidden');
     await refreshAccounts();
@@ -362,7 +381,7 @@ $('account-form').addEventListener('submit', async (event) => {
 // ---------------------------------------------------------------- 設定
 
 $('btn-regen-key').addEventListener('click', async () => {
-  if (!confirm('重新產生後，舊的 API 金鑰會立即失效，確定嗎？')) return;
+  if (!confirm(t('confirm.regenKey'))) return;
   try {
     state.session = await api('/api/settings', { method: 'PUT', body: { regenerate_api_key: true } });
     renderSession();
@@ -372,12 +391,12 @@ $('btn-regen-key').addEventListener('click', async () => {
 $('btn-change-password').addEventListener('click', async () => {
   const current = $('cur-password').value;
   const next = $('new-password').value;
-  if (!next) { toast('請輸入新密碼', 'err'); return; }
+  if (!next) { toast(t('toast.needNewPassword'), 'err'); return; }
   try {
     state.session = await api('/api/settings', { method: 'PUT', body: { current_password: current, new_password: next } });
     $('cur-password').value = '';
     $('new-password').value = '';
-    toast('密碼已更新', 'ok');
+    toast(t('toast.passwordUpdated'), 'ok');
   } catch (err) { toast(err.message, 'err'); }
 });
 
@@ -428,7 +447,7 @@ function renderModels() {
   const models = currentModels();
   const container = $('model-list');
   if (!models.length) {
-    container.innerHTML = '<div class="empty" style="padding:26px">尚未設定模型</div>';
+    container.innerHTML = `<div class="empty" style="padding:26px">${esc(t('models.empty'))}</div>`;
     return;
   }
 
@@ -437,7 +456,7 @@ function renderModels() {
       <code>${esc(model.id)}</code>
       <span class="model-name">${esc(model.name || '')}</span>
       <div class="spacer"></div>
-      <button class="btn btn-sm btn-danger" data-action="remove-model" data-id="${esc(model.id)}">移除</button>
+      <button class="btn btn-sm btn-danger" data-action="remove-model" data-id="${esc(model.id)}">${esc(t('models.remove'))}</button>
     </div>`).join('');
 }
 
@@ -448,7 +467,7 @@ function openCatalogModal() {
 
 async function loadCatalog(refresh) {
   state.catalog = [];
-  $('cat-meta').textContent = '載入中…';
+  $('cat-meta').textContent = t('catalog.loading');
   $('cat-list').innerHTML = '';
   try {
     const data = await api('/api/models/catalog' + (refresh ? '?refresh=1' : ''));
@@ -474,24 +493,24 @@ function renderCatalog() {
     return `${item.title} ${item.native_id} ${item.platform}`.toLowerCase().includes(keyword);
   });
 
-  $('cat-meta').textContent = `顯示 ${items.length} / ${catalog.length} 個模型`;
+  $('cat-meta').textContent = t('catalog.count', { shown: items.length, total: catalog.length });
   if (!items.length) {
-    $('cat-list').innerHTML = '<div class="empty">沒有符合的模型</div>';
+    $('cat-list').innerHTML = `<div class="empty">${esc(t('catalog.empty'))}</div>`;
     return;
   }
 
   $('cat-list').innerHTML = items.map((item) => {
     const already = added.has(item.id);
     const tags = [];
-    if (item.has_tools) tags.push('工具');
-    if (item.has_vision) tags.push('視覺');
-    if (item.is_reasoning) tags.push('推理');
-    if (!item.available) tags.push('已下架');
+    if (item.has_tools) tags.push(t('catalog.tagTools'));
+    if (item.has_vision) tags.push(t('catalog.tagVision'));
+    if (item.is_reasoning) tags.push(t('catalog.tagReasoning'));
+    if (!item.available) tags.push(t('catalog.tagRetired'));
 
     const parts = [];
     if (!already) parts.push(suggestModelId(item, used));
-    parts.push(item.native_id, item.platform, `${item.credit_price} 點`);
-    if (tags.length) parts.push(tags.join('、'));
+    parts.push(item.native_id, item.platform, t('catalog.price', { points: item.credit_price }));
+    if (tags.length) parts.push(tags.join(t('list.separator')));
 
     return `
       <div class="cat-item">
@@ -500,7 +519,7 @@ function renderCatalog() {
           <div class="cat-sub">${esc(parts.join(' · '))}</div>
         </div>
         <div class="spacer"></div>
-        <button class="btn btn-sm ${already ? '' : 'btn-primary'}" data-add="${esc(item.id)}"${already ? ' disabled' : ''}>${already ? '已加入' : '加入'}</button>
+        <button class="btn btn-sm ${already ? '' : 'btn-primary'}" data-add="${esc(item.id)}"${already ? ' disabled' : ''}>${esc(already ? t('catalog.added') : t('catalog.add'))}</button>
       </div>`;
   }).join('');
 }
@@ -525,7 +544,7 @@ $('cat-list').addEventListener('click', async (event) => {
     });
     renderSession();
     renderCatalog();
-    toast(`已加入模型 ${alias}`, 'ok');
+    toast(t('toast.modelAdded', { id: alias }), 'ok');
   } catch (err) {
     button.disabled = false;
     toast(err.message, 'err');
@@ -536,12 +555,12 @@ $('model-list').addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action="remove-model"]');
   if (!button) return;
   const id = button.dataset.id;
-  if (!confirm(`確定要移除模型「${id}」嗎？`)) return;
+  if (!confirm(t('confirm.removeModel', { id }))) return;
   try {
     state.session = await api(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' });
     renderSession();
     renderCatalog();
-    toast(`已移除模型 ${id}`, 'ok');
+    toast(t('toast.modelRemoved', { id }), 'ok');
   } catch (err) {
     toast(err.message, 'err');
   }
@@ -550,7 +569,7 @@ $('model-list').addEventListener('click', async (event) => {
 // ---------------------------------------------------------------- 其他互動
 
 $('btn-add').addEventListener('click', () => openAccountModal(null));
-$('btn-refresh').addEventListener('click', () => refreshAccounts().then(() => toast('已重新整理')).catch((err) => toast(err.message, 'err')));
+$('btn-refresh').addEventListener('click', () => refreshAccounts().then(() => toast(t('toast.refreshed'))).catch((err) => toast(err.message, 'err')));
 $('btn-settings').addEventListener('click', () => $('modal-settings').classList.remove('hidden'));
 
 document.querySelectorAll('[data-close]').forEach((button) => {
@@ -569,9 +588,9 @@ document.querySelectorAll('[data-copy]').forEach((button) => {
     const text = target.textContent;
     try {
       await navigator.clipboard.writeText(text);
-      toast('已複製', 'ok');
+      toast(t('toast.copied'), 'ok');
     } catch (err) {
-      toast('複製失敗，請手動選取', 'err');
+      toast(t('toast.copyFailed'), 'err');
     }
   });
 });
@@ -586,10 +605,10 @@ $('btn-logout').addEventListener('click', async () => {
 $('setup-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const password = $('setup-password').value;
-  if (password !== $('setup-confirm').value) { toast('兩次輸入的密碼不一致', 'err'); return; }
+  if (password !== $('setup-confirm').value) { toast(t('toast.passwordMismatch'), 'err'); return; }
   try {
     state.session = await api('/api/setup', { method: 'POST', body: { password } });
-    toast('密碼設定完成', 'ok');
+    toast(t('toast.setupDone'), 'ok');
     await enterDashboard();
   } catch (err) { toast(err.message, 'err'); }
 });
@@ -602,5 +621,33 @@ $('login-form').addEventListener('submit', async (event) => {
     await enterDashboard();
   } catch (err) { toast(err.message, 'err'); }
 });
+
+// ---------------------------------------------------------------- 語系
+
+// refreshDynamicText 重新套用由程式產生、不經過 data-i18n 的文案。
+function refreshDynamicText() {
+  if (state.summary) renderChips(state.summary);
+  if (state.session) renderModels();
+  renderAccounts();
+  if (state.catalogLoaded) renderCatalog();
+  if (!$('modal-account').classList.contains('hidden')) {
+    const titleKey = state.editing ? 'account.titleEdit' : 'account.titleAdd';
+    $('account-title').dataset.i18n = titleKey;
+    $('account-title').textContent = t(titleKey);
+    setAccountMode(state.accountMode);
+  }
+}
+
+document.querySelectorAll('[data-lang-btn]').forEach((button) => {
+  button.addEventListener('click', () => {
+    setLanguage(button.dataset.langBtn);
+    applyI18n();
+    refreshDynamicText();
+  });
+});
+
+// 啟動時先套用語系，再開始抓資料。
+setLanguage(detectLanguage());
+applyI18n();
 
 init();

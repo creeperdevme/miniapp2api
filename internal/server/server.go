@@ -182,11 +182,11 @@ func (s *Server) loggedIn(r *http.Request) bool {
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.cfg.HasPassword() {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "尚未設定登入密碼"})
+			writeAdminError(w, http.StatusConflict, "password_not_set", "admin password is not set")
 			return
 		}
 		if !s.loggedIn(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "請先登入"})
+			writeAdminError(w, http.StatusUnauthorized, "login_required", "not signed in")
 			return
 		}
 		next(w, r)
@@ -245,7 +245,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.HasPassword() {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "已經設定過密碼，請直接登入"})
+		writeAdminError(w, http.StatusBadRequest, "password_already_set", "an admin password is already set; please sign in")
 		return
 	}
 
@@ -257,13 +257,13 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cfg.SetPassword(payload.Password); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeAdminErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
 	token := s.sess.create()
 	s.setSessionCookie(w, token, int(sessionTTL.Seconds()))
-	s.log.Printf("已設定登入密碼")
+	s.log.Printf("admin password set")
 	// 首次設定時把剛產生的金鑰一起回傳，讓介面顯示一次。
 	writeJSON(w, http.StatusOK, s.sessionPayloadWithKey(true, s.cfg.Key()))
 }
@@ -281,7 +281,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, config.ErrPasswordNotSet) {
 			status = http.StatusConflict
 		}
-		writeJSON(w, status, map[string]string{"error": err.Error()})
+		writeAdminErrorFrom(w, status, err)
 		return
 	}
 
@@ -324,18 +324,18 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		freshKey = key
-		s.log.Printf("已重新產生 API 金鑰：%s", store.MaskToken(key))
+		s.log.Printf("API key regenerated: %s", store.MaskToken(key))
 	}
 	if payload.NewPassword != "" {
 		if err := s.cfg.CheckPassword(payload.CurrentPassword); err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "目前密碼錯誤"})
+			writeAdminError(w, http.StatusUnauthorized, "wrong_password", "current password is wrong")
 			return
 		}
 		if err := s.cfg.SetPassword(payload.NewPassword); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeAdminErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
-		s.log.Printf("登入密碼已變更")
+		s.log.Printf("admin password changed")
 	}
 
 	writeJSON(w, http.StatusOK, s.sessionPayloadWithKey(true, freshKey))
@@ -349,7 +349,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 const catalogTTL = 10 * time.Minute
 
 // errNoCatalogAccount 表示號池中沒有帳號可以讀取模型目錄。
-var errNoCatalogAccount = errors.New("號池中沒有可用的帳號，無法讀取模型目錄")
+var errNoCatalogAccount = errors.New("no usable account in the pool to read the model catalog")
+
+// errMissingCredentials 表示新增帳號時既沒有 JWT 也沒有信箱密碼。
+var errMissingCredentials = errors.New("provide a JWT, or an email and password")
 
 type catalogEntry struct {
 	models    []miniapps.AIModel
@@ -407,10 +410,12 @@ func (s *Server) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
 		fetched, err := s.fetchCatalog(r.Context(), toolID)
 		if err != nil {
 			status := http.StatusBadGateway
+			code := "catalog_failed"
 			if errors.Is(err, errNoCatalogAccount) {
 				status = http.StatusServiceUnavailable
+				code = "no_catalog_account"
 			}
-			writeJSON(w, status, map[string]string{"error": err.Error()})
+			writeAdminError(w, status, code, err.Error())
 			return
 		}
 		s.catalog.put(toolID, fetched)
@@ -470,7 +475,7 @@ func (s *Server) fetchCatalog(ctx context.Context, toolID string) ([]miniapps.AI
 			break
 		}
 	}
-	s.log.Printf("讀取模型目錄失敗：%v", lastErr)
+	s.log.Printf("cannot fetch the model catalog: %v", lastErr)
 	return nil, lastErr
 }
 
@@ -513,14 +518,14 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	switch err := s.cfg.AddModel(model); {
 	case errors.Is(err, config.ErrModelExists):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeAdminErrorFrom(w, http.StatusConflict, err)
 		return
 	case err != nil:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeAdminErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
-	s.log.Printf("已新增模型 %s（modelId %s）", model.ID, model.ModelID)
+	s.log.Printf("model added %s (modelId %s)", model.ID, model.ModelID)
 	writeJSON(w, http.StatusOK, s.sessionPayload(true))
 }
 
@@ -529,14 +534,14 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	switch err := s.cfg.RemoveModel(id); {
 	case errors.Is(err, config.ErrModelNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		writeAdminErrorFrom(w, http.StatusNotFound, err)
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdminErrorFrom(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	s.log.Printf("已移除模型 %s", id)
+	s.log.Printf("model removed %s", id)
 	writeJSON(w, http.StatusOK, s.sessionPayload(true))
 }
 
@@ -584,7 +589,11 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if jwt == "" {
 		token, err := s.loginForNewAccount(r.Context(), payload.Email, payload.Password)
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			if errors.Is(err, errMissingCredentials) {
+				writeAdminError(w, http.StatusBadRequest, "missing_credentials", err.Error())
+				return
+			}
+			writeAdminError(w, http.StatusBadGateway, "login_failed", err.Error())
 			return
 		}
 		jwt = token
@@ -599,18 +608,18 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		Enabled:    enabled,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeAdminErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
-	s.log.Printf("新增帳號 %s（%s）", account.DisplayName(), account.ID)
+	s.log.Printf("account added %s (%s)", account.DisplayName(), account.ID)
 	writeJSON(w, http.StatusOK, account.View())
 }
 
 // loginForNewAccount 用帳密登入換一組新的 JWT，供「用 Email + 密碼新增帳號」使用。
 func (s *Server) loginForNewAccount(ctx context.Context, email, password string) (string, error) {
 	if strings.TrimSpace(email) == "" || strings.TrimSpace(password) == "" {
-		return "", errors.New("請填寫 JWT，或改填 Email 與密碼")
+		return "", errMissingCredentials
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -620,7 +629,7 @@ func (s *Server) loginForNewAccount(ctx context.Context, email, password string)
 	if err != nil {
 		return "", err
 	}
-	s.log.Printf("已用 %s 登入取得新的 JWT", strings.TrimSpace(email))
+	s.log.Printf("signed in as %s and got a new JWT", strings.TrimSpace(email))
 	return token, nil
 }
 
@@ -689,7 +698,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
-	s.log.Printf("已刪除帳號 %s", id)
+	s.log.Printf("account deleted %s", id)
 	s.forgetCSRF(id)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -699,11 +708,11 @@ func (s *Server) handleCheckAccount(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	account, ok := s.pool.Get(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": store.ErrNotFound.Error()})
+		writeAdminError(w, http.StatusNotFound, "account_not_found", store.ErrNotFound.Error())
 		return
 	}
 	if account.JWT == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "此帳號缺少 JWT"})
+		writeAdminError(w, http.StatusBadRequest, "account_missing_jwt", "this account has no JWT")
 		return
 	}
 
@@ -731,7 +740,7 @@ func (s *Server) handleCheckAccount(w http.ResponseWriter, r *http.Request) {
 // 因此帳號若填了密碼，就能在到期前自動換一組新的。
 func (s *Server) renewAccount(ctx context.Context, account store.Account) (store.Account, error) {
 	if !account.AutoRenewable() {
-		return account, errors.New("此帳號沒有設定密碼，無法自動續期")
+		return account, errors.New("this account has no stored password, so it cannot be renewed automatically")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -755,7 +764,7 @@ func (s *Server) renewAccount(ctx context.Context, account store.Account) (store
 	if err != nil {
 		return account, err
 	}
-	s.log.Printf("帳號 %s 已重新登入續期（JWT 到期 %s）", renewed.DisplayName(), renewed.ExpiresAt)
+	s.log.Printf("account %s renewed by signing in again (JWT expires %s)", renewed.DisplayName(), renewed.ExpiresAt)
 	return renewed, nil
 }
 
@@ -763,14 +772,14 @@ func (s *Server) handleRenewAccount(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	account, ok := s.pool.Get(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": store.ErrNotFound.Error()})
+		writeAdminError(w, http.StatusNotFound, "account_not_found", store.ErrNotFound.Error())
 		return
 	}
 
 	renewed, err := s.renewAccount(r.Context(), account)
 	if err != nil {
 		s.pool.SetError(id, err.Error())
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeAdminError(w, http.StatusBadGateway, "renew_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, renewed.View())
@@ -783,7 +792,7 @@ func (s *Server) handleRenewAccount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "找不到 API 路徑"})
+		writeAdminError(w, http.StatusNotFound, "api_not_found", "unknown API endpoint")
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
@@ -791,7 +800,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "不支援的請求方法"})
+		writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -804,7 +813,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		// 單頁式介面：其他路徑一律回傳 index.html
 		content, err = webFiles.ReadFile("web/index.html")
 		if err != nil {
-			http.Error(w, "找不到網頁介面", http.StatusInternalServerError)
+			http.Error(w, "web UI not found", http.StatusInternalServerError)
 			return
 		}
 		path = "index.html"
@@ -848,14 +857,14 @@ func (s *Server) credentialsFor(account store.Account, model config.Model) minia
 func decodeJSON(r *http.Request, target any) error {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
-		return fmt.Errorf("讀取請求內容失敗：%w", err)
+		return fmt.Errorf("cannot read the request body: %w", err)
 	}
 	defer r.Body.Close()
 	if len(strings.TrimSpace(string(body))) == 0 {
-		return errors.New("請求內容為空")
+		return errors.New("request body is empty")
 	}
 	if err := json.Unmarshal(body, target); err != nil {
-		return fmt.Errorf("解析請求內容失敗：%w", err)
+		return fmt.Errorf("cannot parse the request body: %w", err)
 	}
 	return nil
 }
@@ -874,6 +883,40 @@ func writeAPIError(w http.ResponseWriter, status int, message, kind, code string
 		Type:    kind,
 		Code:    code,
 	}})
+}
+
+// writeAdminError 回傳網頁介面用的錯誤。
+//
+// code 是穩定的識別字串，前端據此顯示對應語系的訊息；
+// message 一律是英文，讓直接呼叫 API 的人也能看懂。
+func writeAdminError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]string{"error": message, "code": code})
+}
+
+// writeAdminErrorFrom 用 adminErrorCode 推導錯誤碼後回傳錯誤。
+func writeAdminErrorFrom(w http.ResponseWriter, status int, err error) {
+	writeAdminError(w, status, adminErrorCode(err), err.Error())
+}
+
+// adminErrorCode 把已知的 sentinel error 對應到穩定的錯誤碼。
+func adminErrorCode(err error) string {
+	switch {
+	case errors.Is(err, config.ErrPasswordNotSet):
+		return "password_not_set"
+	case errors.Is(err, config.ErrPasswordTooShort):
+		return "password_too_short"
+	case errors.Is(err, config.ErrWrongPassword):
+		return "wrong_password"
+	case errors.Is(err, config.ErrModelExists):
+		return "model_exists"
+	case errors.Is(err, config.ErrModelNotFound):
+		return "model_not_found"
+	case errors.Is(err, store.ErrNotFound):
+		return "account_not_found"
+	case errors.Is(err, store.ErrNoAccount):
+		return "no_available_account"
+	}
+	return "request_failed"
 }
 
 func bearerToken(r *http.Request) string {

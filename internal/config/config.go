@@ -44,13 +44,15 @@ const (
 
 var (
 	// ErrPasswordNotSet 表示系統尚未設定登入密碼。
-	ErrPasswordNotSet = errors.New("尚未設定登入密碼")
+	ErrPasswordNotSet = errors.New("admin password is not set")
+	// ErrPasswordTooShort 表示密碼長度不足。
+	ErrPasswordTooShort = errors.New("password is too short")
 	// ErrWrongPassword 表示輸入的密碼錯誤。
-	ErrWrongPassword = errors.New("密碼錯誤")
+	ErrWrongPassword = errors.New("wrong password")
 	// ErrModelExists 表示同名的模型已經存在。
-	ErrModelExists = errors.New("模型已經存在")
+	ErrModelExists = errors.New("model already exists")
 	// ErrModelNotFound 表示找不到指定的模型。
-	ErrModelNotFound = errors.New("找不到模型")
+	ErrModelNotFound = errors.New("model not found")
 )
 
 // Model 是一個可被 /v1/models 列出的上游模型設定。
@@ -89,11 +91,11 @@ func (m *Model) normalize() {
 func (m Model) validate() error {
 	switch {
 	case m.ID == "":
-		return errors.New("模型名稱不可為空")
+		return errors.New("model name must not be empty")
 	case strings.ContainsAny(m.ID, " \t\r\n"):
-		return fmt.Errorf("模型名稱不可包含空白：%q", m.ID)
+		return fmt.Errorf("model name must not contain whitespace: %q", m.ID)
 	case m.ModelID == "":
-		return fmt.Errorf("模型 %s 缺少 modelId", m.ID)
+		return fmt.Errorf("model %s is missing modelId", m.ID)
 	}
 	return nil
 }
@@ -123,12 +125,12 @@ func Load(path string) (*Config, error) {
 	switch {
 	case err == nil:
 		if err := json.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("解析 %s 失敗：%w", path, err)
+			return nil, fmt.Errorf("cannot parse %s: %w", path, err)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		cfg.CreatedAt = timestamp()
 	default:
-		return nil, fmt.Errorf("讀取 %s 失敗：%w", path, err)
+		return nil, fmt.Errorf("cannot read %s: %w", path, err)
 	}
 
 	cfg.path = path
@@ -186,7 +188,7 @@ func (c *Config) Save() error {
 
 func (c *Config) saveLocked() error {
 	if c.path == "" {
-		return errors.New("設定檔路徑為空")
+		return errors.New("config file path is empty")
 	}
 	c.UpdatedAt = timestamp()
 
@@ -215,16 +217,16 @@ func (c *Config) HasPassword() bool {
 // SetPassword 設定（或變更）登入密碼並寫入設定檔。
 func (c *Config) SetPassword(password string) error {
 	if len([]rune(password)) < MinPasswordLength {
-		return fmt.Errorf("密碼長度至少需要 %d 個字元", MinPasswordLength)
+		return fmt.Errorf("%w: at least %d characters", ErrPasswordTooShort, MinPasswordLength)
 	}
 
 	salt := make([]byte, saltLength)
 	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("產生亂數失敗：%w", err)
+		return fmt.Errorf("cannot generate random bytes: %w", err)
 	}
 	key, err := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iterations, pbkdf2KeyLength)
 	if err != nil {
-		return fmt.Errorf("密碼雜湊失敗：%w", err)
+		return fmt.Errorf("cannot hash the password: %w", err)
 	}
 
 	c.mu.Lock()
@@ -247,11 +249,11 @@ func (c *Config) CheckPassword(password string) error {
 
 	salt, err := base64.StdEncoding.DecodeString(saltB64)
 	if err != nil {
-		return fmt.Errorf("設定檔的密碼鹽值損毀：%w", err)
+		return fmt.Errorf("password salt in the config file is corrupted: %w", err)
 	}
 	want, err := base64.StdEncoding.DecodeString(hashB64)
 	if err != nil {
-		return fmt.Errorf("設定檔的密碼雜湊損毀：%w", err)
+		return fmt.Errorf("password hash in the config file is corrupted: %w", err)
 	}
 	got, err := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iterations, len(want))
 	if err != nil {
@@ -405,7 +407,7 @@ func (c *Config) AddModel(model Model) error {
 	c.mu.Lock()
 	if hasModel(c.Models, model.ID) {
 		c.mu.Unlock()
-		return fmt.Errorf("%w：%s", ErrModelExists, model.ID)
+		return fmt.Errorf("%w: %s", ErrModelExists, model.ID)
 	}
 	c.Models = append(c.Models, model)
 	c.mu.Unlock()
@@ -426,7 +428,7 @@ func (c *Config) RemoveModel(id string) error {
 	}
 	if index < 0 {
 		c.mu.Unlock()
-		return fmt.Errorf("%w：%s", ErrModelNotFound, id)
+		return fmt.Errorf("%w: %s", ErrModelNotFound, id)
 	}
 	c.Models = append(c.Models[:index], c.Models[index+1:]...)
 	c.mu.Unlock()
@@ -447,7 +449,7 @@ func (c *Config) BaseURL() string {
 func newAPIKey() (string, error) {
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("產生 API 金鑰失敗：%w", err)
+		return "", fmt.Errorf("cannot generate an API key: %w", err)
 	}
 	return "sk-m2a-" + hex.EncodeToString(buf), nil
 }
@@ -455,14 +457,14 @@ func newAPIKey() (string, error) {
 func splitAddr(addr string) (string, int, error) {
 	host, portText, err := net.SplitHostPort(strings.TrimSpace(addr))
 	if err != nil {
-		return "", 0, fmt.Errorf("位址格式錯誤，請使用 host:port（例如 127.0.0.1:8787）：%w", err)
+		return "", 0, fmt.Errorf("invalid address, use host:port (for example 127.0.0.1:8787): %w", err)
 	}
 	port, err := strconv.Atoi(portText)
 	if err != nil {
-		return "", 0, fmt.Errorf("連接埠格式錯誤：%w", err)
+		return "", 0, fmt.Errorf("invalid port: %w", err)
 	}
 	if port <= 0 || port > 65535 {
-		return "", 0, fmt.Errorf("連接埠必須介於 1-65535，收到 %d", port)
+		return "", 0, fmt.Errorf("port must be between 1 and 65535, got %d", port)
 	}
 	return host, port, nil
 }

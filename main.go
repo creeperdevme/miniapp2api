@@ -25,16 +25,16 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "", "監聽位址，例如 127.0.0.1:8787（預設讀取 config.json）")
-	dataDir := flag.String("data", "", "資料目錄，存放 config.json 與 auths/（預設為執行檔所在目錄）")
-	noBrowser := flag.Bool("no-browser", false, "啟動後不要自動開啟瀏覽器")
+	addr := flag.String("addr", "", "listen address, e.g. 127.0.0.1:8787 (default: read from config.json)")
+	dataDir := flag.String("data", "", "data directory holding config.json and auths/ (default: the executable's folder)")
+	noBrowser := flag.Bool("no-browser", false, "do not open a browser after startup")
 	flag.Parse()
 
 	logger := log.New(os.Stdout, "[miniapp2api] ", log.LstdFlags)
 
 	root, err := resolveDataDir(*dataDir)
 	if err != nil {
-		logger.Fatalf("無法決定資料目錄：%v", err)
+		logger.Fatalf("cannot resolve the data directory: %v", err)
 	}
 
 	cfg, err := config.Load(filepath.Join(root, config.FileName))
@@ -43,7 +43,7 @@ func main() {
 	}
 	if *addr != "" {
 		if err := cfg.SetListenAddr(*addr); err != nil {
-			logger.Fatalf("位址參數錯誤：%v", err)
+			logger.Fatalf("invalid -addr value: %v", err)
 		}
 	}
 	generated, err := cfg.EnsureAPIKey()
@@ -52,7 +52,7 @@ func main() {
 	}
 	if generated {
 		if err := cfg.Save(); err != nil {
-			logger.Fatalf("無法寫入 %s：%v", cfg.Path(), err)
+			logger.Fatalf("cannot write %s: %v", cfg.Path(), err)
 		}
 	}
 
@@ -69,7 +69,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	printBanner(cfg, pool, root, generated)
+	printBanner(cfg, pool, root)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -77,60 +77,49 @@ func main() {
 	listener, err := net.Listen("tcp", cfg.ListenAddr())
 	if err != nil {
 		if isAddrInUse(err) {
-			logger.Fatalf("連接埠 %s 已被占用，請用 -addr 127.0.0.1:其他連接埠 啟動。", cfg.ListenAddr())
+			logger.Fatalf("port %s is already in use; start again with -addr 127.0.0.1:<another port>", cfg.ListenAddr())
 		}
-		logger.Fatalf("無法啟動伺服器：%v", err)
+		logger.Fatalf("cannot start the server: %v", err)
 	}
 
 	if !*noBrowser {
 		go func() {
 			time.Sleep(400 * time.Millisecond)
 			if err := openBrowser(browserURL(cfg)); err != nil {
-				logger.Printf("無法自動開啟瀏覽器，請手動前往 %s", browserURL(cfg))
+				logger.Printf("could not open a browser, please visit %s manually", browserURL(cfg))
 			}
 		}()
 	}
 
 	go func() {
 		<-ctx.Done()
-		logger.Printf("正在關閉伺服器…")
+		logger.Printf("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
 	}()
 
 	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Fatalf("伺服器結束：%v", err)
+		logger.Fatalf("server stopped: %v", err)
 	}
-	logger.Printf("已停止。")
+	logger.Printf("stopped")
 }
 
-func printBanner(cfg *config.Config, pool *store.Store, root string, generatedKey bool) {
+func printBanner(cfg *config.Config, pool *store.Store, root string) {
 	summary := pool.Summary()
 	line := strings.Repeat("─", 62)
 
 	fmt.Println(line)
 	fmt.Printf(" miniapp2api v%s\n", server.Version)
 	fmt.Println(line)
-	fmt.Printf(" 資料目錄   %s\n", root)
-	fmt.Printf(" 網頁介面   %s\n", browserURL(cfg))
-	fmt.Printf(" OpenAI API %s\n", cfg.BaseURL())
-	if generatedKey {
-		// 剛產生的金鑰只顯示這一次，之後只能從網頁介面重新產生。
-		fmt.Printf(" API 金鑰   %s\n", cfg.Key())
-		fmt.Println("            這是剛產生的金鑰，只會顯示這一次，請立刻保存；")
-		fmt.Println("            之後要查看請在網頁介面按「重新產生 API 金鑰」。")
-	} else {
-		fmt.Printf(" API 金鑰   %s（完整金鑰請在網頁介面重新產生）\n", config.MaskKey(cfg.Key()))
-	}
-	if cfg.RequireKey() {
-		fmt.Printf("            呼叫時請帶 Authorization: Bearer <API 金鑰>\n")
-	}
-	fmt.Printf(" 號池       %d 個帳號（啟用 %d／停用 %d）\n", summary["total"], summary["enabled"], summary["disabled"])
+	fmt.Printf(" Data dir    %s\n", root)
+	fmt.Printf(" Web UI      %s\n", browserURL(cfg))
+	fmt.Printf(" OpenAI API  %s\n", cfg.BaseURL())
+	fmt.Printf(" Accounts    %d total (%d enabled / %d disabled)\n", summary["total"], summary["enabled"], summary["disabled"])
 	fmt.Println(line)
 
 	if !cfg.HasPassword() {
-		fmt.Println(" ⚠ 首次啟動：請在網頁上設定一組登入密碼。")
+		fmt.Println(" First run: open the Web UI and set an admin password.")
 		fmt.Println(line)
 	}
 }

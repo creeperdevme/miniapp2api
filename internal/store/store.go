@@ -33,10 +33,10 @@ const (
 )
 
 // ErrNotFound 表示找不到指定的帳號。
-var ErrNotFound = errors.New("找不到帳號")
+var ErrNotFound = errors.New("account not found")
 
 // ErrNoAccount 表示目前沒有可用的帳號。
-var ErrNoAccount = errors.New("號池中沒有可用的帳號（可能都已停用或正在冷卻中）")
+var ErrNoAccount = errors.New("no usable account in the pool (all disabled or cooling down)")
 
 // Stats 是帳號的使用統計。
 type Stats struct {
@@ -264,13 +264,13 @@ type Store struct {
 func Open(root string) (*Store, error) {
 	dir := filepath.Join(root, DirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("建立 %s 失敗：%w", dir, err)
+		return nil, fmt.Errorf("cannot create %s: %w", dir, err)
 	}
 
 	s := &Store{dir: dir, accounts: map[string]*Account{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("讀取 %s 失敗：%w", dir, err)
+		return nil, fmt.Errorf("cannot read %s: %w", dir, err)
 	}
 
 	for _, entry := range entries {
@@ -280,11 +280,11 @@ func Open(root string) (*Store, error) {
 		path := filepath.Join(dir, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("讀取 %s 失敗：%w", path, err)
+			return nil, fmt.Errorf("cannot read %s: %w", path, err)
 		}
 		var acc Account
 		if err := json.Unmarshal(data, &acc); err != nil {
-			return nil, fmt.Errorf("解析 %s 失敗：%w", path, err)
+			return nil, fmt.Errorf("cannot parse %s: %w", path, err)
 		}
 		if acc.ID == "" {
 			acc.ID = strings.TrimSuffix(entry.Name(), ".json")
@@ -402,7 +402,7 @@ func (s *Store) Count() int {
 // Create 新增一個帳號並寫入 auths/{email}.json。
 func (s *Store) Create(acc Account) (Account, error) {
 	if strings.TrimSpace(acc.JWT) == "" {
-		return Account{}, errors.New("JWT 不可為空")
+		return Account{}, errors.New("JWT must not be empty")
 	}
 
 	now := time.Now().Format(time.RFC3339)
@@ -420,7 +420,7 @@ func (s *Store) Create(acc Account) (Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.accounts[acc.ID]; exists {
-		return Account{}, fmt.Errorf("帳號 %s 已存在", acc.ID)
+		return Account{}, fmt.Errorf("account %s already exists", acc.ID)
 	}
 	s.assignFile(&acc)
 	if err := s.saveLocked(&acc); err != nil {
@@ -637,10 +637,10 @@ func (s *Store) saveLocked(acc *Account) error {
 	path := s.pathFor(acc.FileName())
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("寫入 %s 失敗：%w", path, err)
+		return fmt.Errorf("cannot write %s: %w", path, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("更新 %s 失敗：%w", path, err)
+		return fmt.Errorf("cannot update %s: %w", path, err)
 	}
 	return nil
 }

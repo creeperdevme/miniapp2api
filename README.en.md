@@ -28,10 +28,11 @@ Pure Go, no third-party dependencies, and a single self-contained binary (Window
 - OpenAI-compatible endpoints: `GET /v1/models`, `POST /v1/chat/completions` (supports `stream`).
 - Web UI: pool listing and stats, model management, API key management, password change.
 - Two ways to add an account: paste a **JWT**, or provide an **email + password** and let the relay sign in for you.
+- The Web UI switches between **繁體中文 / English** (top right), while console output is always English.
 - **CSRF is fully automatic**: requests that need it fetch a fresh pair from `/auth/csrf`, so you never copy cookies or headers by hand.
 - **Automatic JWT renewal**: accounts that store a password are silently re-logged-in when the JWT is within 3 days of expiring, and you can also renew on demand.
 - Picks the least recently used enabled account; failing accounts cool down and the request automatically retries with the next one.
-- The admin password is stored as a PBKDF2-HMAC-SHA256 hash (never plaintext), and the API key is shown only once when generated.
+- The admin password is stored as a PBKDF2-HMAC-SHA256 hash (never plaintext); the API key is shown only once in the Web UI and is never printed to the console.
 
 ## Installation
 
@@ -61,7 +62,7 @@ You can also trigger a build without tagging by going to **Actions → release �
    .\miniapp2api.exe
    ```
 
-3. On first launch it prints the API key and opens your browser (pass `-no-browser` to skip that).
+3. It opens your browser (pass `-no-browser` to skip that). The console prints the data directory, URLs and pool size, but **never the API key**.
 4. If Windows SmartScreen appears, choose "More info" -> "Run anyway".
 
 Common flags:
@@ -197,11 +198,13 @@ GOOS=linux   GOARCH=arm64 go build -o miniapp2api-linux-arm64 .
 2. It asks you to **set an admin password** (at least 6 characters) and logs you in.
 3. You land on the **account pool** page, which shows the `Base URL` and the `API key`.
 
-   > The API key is displayed only once (both in the console and in the UI).
+   > The API key is displayed only once, in the Web UI (right after setup, or when you click "Regenerate API key").
    > To see it again you must click "Regenerate API key" in **Settings**, which invalidates the old one.
    > If you missed it, simply regenerate.
 
 4. The model list starts empty. Add at least one model via **Settings -> Add from model catalog** before calling `/v1`.
+
+Use the **中文 / English** switch in the top right to change the UI language at any time; the choice is remembered in your browser. Console output stays English.
 
 ## Adding accounts
 
@@ -391,7 +394,7 @@ internal/store/                the auths/{email}.json pool
 internal/miniapps/             api.miniapps.ai client (CSRF, login, sending, parsing)
 internal/openai/               OpenAI-compatible types and message conversion
 internal/server/               HTTP routes, web UI, /v1 endpoints
-internal/server/web/           web UI (index.html / app.js, embedded via go:embed)
+internal/server/web/           web UI (index.html / app.js / i18n.js, embedded via go:embed)
 .github/workflows/ci.yml       gofmt, vet, tests and dual-platform builds on push/PR
 .github/workflows/release.yml  builds Windows/Linux binaries and publishes a Release on tags
 ```
