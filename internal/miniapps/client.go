@@ -78,11 +78,11 @@ func (c *CSRFCache) Set(cookie, token string) {
 func (c Credentials) Validate() error {
 	switch {
 	case strings.TrimSpace(c.JWT) == "":
-		return errors.New("缺少 JWT")
+		return errors.New("missing JWT")
 	case strings.TrimSpace(c.ToolID) == "":
-		return errors.New("缺少 toolId")
+		return errors.New("missing toolId")
 	case strings.TrimSpace(c.ModelID) == "":
-		return errors.New("缺少 modelId")
+		return errors.New("missing modelId")
 	}
 	return nil
 }
@@ -172,7 +172,7 @@ type TimeoutError struct {
 }
 
 func (e *TimeoutError) Error() string {
-	return fmt.Sprintf("等待 AI 回覆逾時（已等待 %s）", e.Waited.Round(time.Second))
+	return fmt.Sprintf("timed out waiting for the AI reply (waited %s)", e.Waited.Round(time.Second))
 }
 
 // Client 是單一帳號的上游連線。
@@ -569,7 +569,7 @@ func (c *Client) csrfPair(ctx context.Context, refresh bool) (string, string, er
 // Login 用帳號密碼換一組新的 JWT，並先用新憑證驗證一次再回傳。
 func (c *Client) Login(ctx context.Context, email, password string) (string, error) {
 	if strings.TrimSpace(email) == "" || password == "" {
-		return "", errors.New("缺少登入用的信箱或密碼")
+		return "", errors.New("missing email or password for sign-in")
 	}
 
 	data, err := json.Marshal(map[string]string{"email": email, "password": password})
