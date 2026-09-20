@@ -560,6 +560,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 type accountPayload struct {
 	Name       string `json:"name"`
 	JWT        string `json:"jwt"`
+	Email      string `json:"email"`
 	Password   string `json:"password"`
 	CSRFCookie string `json:"csrf_cookie"`
 	CSRFToken  string `json:"csrf_token"`
@@ -578,9 +579,20 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		enabled = *payload.Enabled
 	}
 
+	// 沒有 JWT 時改用信箱密碼登入換一組，讓新增帳號不必手動抓 JWT。
+	jwt := strings.TrimSpace(payload.JWT)
+	if jwt == "" {
+		token, err := s.loginForNewAccount(r.Context(), payload.Email, payload.Password)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		jwt = token
+	}
+
 	account, err := s.pool.Create(store.Account{
 		Name:       payload.Name,
-		JWT:        payload.JWT,
+		JWT:        jwt,
 		Password:   payload.Password,
 		CSRFCookie: payload.CSRFCookie,
 		CSRFToken:  payload.CSRFToken,
@@ -593,6 +605,23 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 
 	s.log.Printf("新增帳號 %s（%s）", account.DisplayName(), account.ID)
 	writeJSON(w, http.StatusOK, account.View())
+}
+
+// loginForNewAccount 用帳密登入換一組新的 JWT，供「用 Email + 密碼新增帳號」使用。
+func (s *Server) loginForNewAccount(ctx context.Context, email, password string) (string, error) {
+	if strings.TrimSpace(email) == "" || strings.TrimSpace(password) == "" {
+		return "", errors.New("請填寫 JWT，或改填 Email 與密碼")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	token, err := miniapps.New(miniapps.Credentials{}).Login(ctx, strings.TrimSpace(email), password)
+	if err != nil {
+		return "", err
+	}
+	s.log.Printf("已用 %s 登入取得新的 JWT", strings.TrimSpace(email))
+	return token, nil
 }
 
 func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {

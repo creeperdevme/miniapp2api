@@ -278,28 +278,71 @@ $('accounts').addEventListener('click', async (event) => {
 
 // ---------------------------------------------------------------- 帳號表單
 
+const accountModes = {
+  jwt: {
+    hint: '貼上瀏覽器登入 miniapps.ai 後的 JWT，會存成 auths/{email}.json；CSRF 由中轉自動取得。',
+    passwordLabel: '密碼（選填）',
+    passwordHint: '填寫後 JWT 快到期時會自動重新登入續期',
+  },
+  login: {
+    hint: '填寫 miniapps.ai 的登入信箱與密碼，中轉會先幫你登入換一組 JWT，再存成 auths/{email}.json。',
+    passwordLabel: '密碼',
+    passwordHint: 'miniapps.ai 的登入密碼',
+  },
+};
+
+function setAccountMode(mode) {
+  if (!accountModes[mode]) mode = 'jwt';
+  state.accountMode = mode;
+
+  const editing = !!state.editing;
+  const login = mode === 'login';
+  $('acct-mode').querySelectorAll('button[data-mode]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.mode === mode);
+  });
+
+  // 隱藏的欄位一定要關掉 required，否則瀏覽器會擋住送出。
+  $('acct-jwt-group').classList.toggle('hidden', login);
+  $('acct-email-group').classList.toggle('hidden', !login);
+  $('acct-jwt').required = !editing && !login;
+  $('acct-email').required = !editing && login;
+  $('acct-password').required = !editing && login;
+
+  $('acct-password-label').textContent = editing ? '密碼（選填）' : accountModes[mode].passwordLabel;
+  $('acct-password').placeholder = editing ? '留空表示不變更' : accountModes[mode].passwordHint;
+  if (!editing) $('account-hint').textContent = accountModes[mode].hint;
+}
+
 function openAccountModal(account) {
   state.editing = account || null;
   const editing = !!account;
   $('account-title').textContent = editing ? '編輯帳號' : '新增帳號';
-  $('account-hint').textContent = editing
-    ? 'JWT 與密碼留空表示不變更，填寫則會覆蓋原本的值。'
-    : '貼上瀏覽器登入 miniapps.ai 後的 JWT，會存成 auths/{email}.json；CSRF 由中轉自動取得，填了密碼就能在到期前自動換新。';
+  if (editing) $('account-hint').textContent = 'JWT 與密碼留空表示不變更，填寫則會覆蓋原本的值。';
   $('acct-name').value = editing ? account.name || '' : '';
   $('acct-jwt').value = '';
+  $('acct-email').value = '';
   $('acct-password').value = '';
-  $('acct-jwt').required = !editing;
+  $('acct-mode').classList.toggle('hidden', editing);
+  setAccountMode('jwt');
   $('modal-account').classList.remove('hidden');
   $('acct-name').focus();
 }
 
+$('acct-mode').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-mode]');
+  if (button) setAccountMode(button.dataset.mode);
+});
+
 $('account-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const editing = !!state.editing;
+  const login = !editing && state.accountMode === 'login';
   const payload = {
     name: $('acct-name').value.trim(),
-    jwt: $('acct-jwt').value.trim(),
     password: $('acct-password').value,
   };
+  if (login) payload.email = $('acct-email').value.trim();
+  else payload.jwt = $('acct-jwt').value.trim();
 
   const button = $('account-submit');
   button.disabled = true;
@@ -309,7 +352,7 @@ $('account-form').addEventListener('submit', async (event) => {
       toast('已更新帳號', 'ok');
     } else {
       await api('/api/accounts', { method: 'POST', body: payload });
-      toast('已新增帳號', 'ok');
+      toast(login ? '已登入並新增帳號' : '已新增帳號', 'ok');
     }
     $('modal-account').classList.add('hidden');
     await refreshAccounts();
