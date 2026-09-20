@@ -1,0 +1,2 @@
+# 統一換行：倉庫與工作區一律使用 LF，避免 Windows 上出現換行造成的假變更。
+* text=auto eol=lf
