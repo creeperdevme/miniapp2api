@@ -22,6 +22,7 @@ Pure Go, no third-party dependencies, and a single self-contained binary (Window
 - [How a request is relayed](#how-a-request-is-relayed)
 - [Troubleshooting](#troubleshooting)
 - [Development and releases](#development-and-releases)
+- [Acknowledgements](#acknowledgements)
 
 ## Features
 
@@ -412,6 +413,10 @@ from `go.mod`, packages them as zip/tar.gz, publishes them to Releases, and inje
 
 To get the archives without publishing a Release, run **Actions -> release -> Run workflow** manually; the version
 becomes `0.0.0-<commit>` and the files land in that run's Artifacts.
+
+## Acknowledgements
+
+This project acknowledges and thanks the [LINUX DO](https://linux.do/) community, where the project is also promoted and discussed.
 
 ## License
 
