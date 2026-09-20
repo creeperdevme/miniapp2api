@@ -211,8 +211,8 @@ type sessionPayload struct {
 	Version      string           `json:"version"`
 }
 
-// Version 是程式版本，會顯示在網頁介面上。
-const Version = "1.0.0"
+// Version 是程式版本，會顯示在網頁介面上；發行時由建置流程以 -ldflags -X 覆寫。
+var Version = "1.0.0"
 
 func (s *Server) sessionPayload(loggedIn bool) sessionPayload {
 	return s.sessionPayloadWithKey(loggedIn, "")
