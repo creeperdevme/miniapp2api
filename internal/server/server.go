@@ -212,7 +212,7 @@ type sessionPayload struct {
 }
 
 // Version 是程式版本，會顯示在網頁介面上；發行時由建置流程以 -ldflags -X 覆寫。
-var Version = "1.0.0"
+var Version = "1.0.1"
 
 func (s *Server) sessionPayload(loggedIn bool) sessionPayload {
 	return s.sessionPayloadWithKey(loggedIn, "")

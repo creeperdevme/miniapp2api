@@ -102,7 +102,7 @@ schtasks /delete /tn miniapp2api /f # 移除
 
 ```bash
 # 1) 下載並解壓（版本號請換成實際下載到的）
-tar -xzf miniapp2api_1.0.0_linux_amd64.tar.gz
+tar -xzf miniapp2api_<版本>_linux_amd64.tar.gz
 chmod +x miniapp2api
 
 # 2) 安裝到 PATH（可選）

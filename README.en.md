@@ -102,7 +102,7 @@ schtasks /delete /tn miniapp2api /f   # remove
 
 ```bash
 # 1) download and extract (use the version you actually downloaded)
-tar -xzf miniapp2api_1.0.0_linux_amd64.tar.gz
+tar -xzf miniapp2api_<version>_linux_amd64.tar.gz
 chmod +x miniapp2api
 
 # 2) install into PATH (optional)
