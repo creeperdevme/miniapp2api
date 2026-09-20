@@ -280,12 +280,10 @@ $('accounts').addEventListener('click', async (event) => {
 
 const accountModes = {
   jwt: {
-    hint: '貼上瀏覽器登入 miniapps.ai 後的 JWT，會存成 auths/{email}.json；CSRF 由中轉自動取得。',
     passwordLabel: '密碼（選填）',
     passwordHint: '填寫後 JWT 快到期時會自動重新登入續期',
   },
   login: {
-    hint: '填寫 miniapps.ai 的登入信箱與密碼，中轉會先幫你登入換一組 JWT，再存成 auths/{email}.json。',
     passwordLabel: '密碼',
     passwordHint: 'miniapps.ai 的登入密碼',
   },
@@ -310,14 +308,12 @@ function setAccountMode(mode) {
 
   $('acct-password-label').textContent = editing ? '密碼（選填）' : accountModes[mode].passwordLabel;
   $('acct-password').placeholder = editing ? '留空表示不變更' : accountModes[mode].passwordHint;
-  if (!editing) $('account-hint').textContent = accountModes[mode].hint;
 }
 
 function openAccountModal(account) {
   state.editing = account || null;
   const editing = !!account;
   $('account-title').textContent = editing ? '編輯帳號' : '新增帳號';
-  if (editing) $('account-hint').textContent = 'JWT 與密碼留空表示不變更，填寫則會覆蓋原本的值。';
   $('acct-name').value = editing ? account.name || '' : '';
   $('acct-jwt').value = '';
   $('acct-email').value = '';
