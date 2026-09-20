@@ -35,14 +35,14 @@ jobs:
       - name: 建置（Linux）
         env:
           CGO_ENABLED: "0"
-        run: go build -trimpath -o /tmp/miniapp2api .
+        run: go build -trimpath -o /tmp/miniapp2api ./cmd/server
 
       - name: 建置（Windows）
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: "0"
-        run: go build -trimpath -o /tmp/miniapp2api.exe .
+        run: go build -trimpath -o /tmp/miniapp2api.exe ./cmd/server
 
   lint-frontend:
     runs-on: ubuntu-latest
