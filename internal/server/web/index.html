@@ -358,19 +358,13 @@ details[open] summary::before { transform: rotate(90deg); }
 <div id="modal-account" class="overlay hidden">
   <form class="modal" id="account-form">
     <h3 id="account-title">新增帳號</h3>
-    <p class="hint" id="account-hint">貼上瀏覽器登入 miniapps.ai 後的 JWT 與 CSRF 資訊。</p>
+    <p class="hint" id="account-hint">貼上瀏覽器登入 miniapps.ai 後的 JWT，CSRF 由中轉自動取得。</p>
 
     <label for="acct-name">名稱（選填）</label>
     <input id="acct-name" type="text" placeholder="例如：主帳號">
 
     <label for="acct-jwt">JWT</label>
     <textarea id="acct-jwt" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." required></textarea>
-
-    <label for="acct-csrf-cookie">CSRF_Cookie</label>
-    <textarea id="acct-csrf-cookie" placeholder="__Host-miniapps.x-csrf-token 的 Cookie 值" required></textarea>
-
-    <label for="acct-csrf-token">CSRF_Token</label>
-    <textarea id="acct-csrf-token" placeholder="請求標頭 x-csrf-token 的值" required></textarea>
 
     <div class="modal-actions">
       <button class="btn" type="button" data-close="modal-account">取消</button>

@@ -259,7 +259,7 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 		}
 		excluded[account.ID] = true
 
-		client := miniapps.New(credentialsFor(account, model))
+		client := miniapps.New(s.credentialsFor(account, model))
 		answer, conversationID, err := client.Ask(ctx, prompt, s.cfg.Timeout())
 		s.pool.Record(account.ID, err, cooldownFor(err))
 		switch {

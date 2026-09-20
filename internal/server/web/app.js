@@ -178,7 +178,7 @@ function renderAccounts() {
   const container = $('accounts');
   if (!state.accounts.length) {
     container.className = '';
-    container.innerHTML = '<div class="empty">號池是空的，點選右上角「＋ 新增帳號」開始加入 JWT 與 CSRF 資訊。</div>';
+    container.innerHTML = '<div class="empty">號池是空的，點選右上角「＋ 新增帳號」加入一組 JWT 即可。</div>';
     return;
   }
   container.className = 'grid';
@@ -263,15 +263,11 @@ function openAccountModal(account) {
   const editing = !!account;
   $('account-title').textContent = editing ? '編輯帳號' : '新增帳號';
   $('account-hint').textContent = editing
-    ? 'JWT／CSRF 欄位留空表示不變更，填寫則會覆蓋原本的值。'
-    : '貼上瀏覽器登入 miniapps.ai 後的 JWT 與 CSRF 資訊，會存成 auths/{uuid}.json。';
+    ? 'JWT 留空表示不變更，填寫則會覆蓋原本的值。'
+    : '貼上瀏覽器登入 miniapps.ai 後的 JWT，會存成 auths/{email}.json；CSRF 由中轉自動取得。';
   $('acct-name').value = editing ? account.name || '' : '';
   $('acct-jwt').value = '';
-  $('acct-csrf-cookie').value = '';
-  $('acct-csrf-token').value = '';
   $('acct-jwt').required = !editing;
-  $('acct-csrf-cookie').required = !editing;
-  $('acct-csrf-token').required = !editing;
   $('modal-account').classList.remove('hidden');
   $('acct-name').focus();
 }
@@ -281,8 +277,6 @@ $('account-form').addEventListener('submit', async (event) => {
   const payload = {
     name: $('acct-name').value.trim(),
     jwt: $('acct-jwt').value.trim(),
-    csrf_cookie: $('acct-csrf-cookie').value.trim(),
-    csrf_token: $('acct-csrf-token').value.trim(),
   };
 
   const button = $('account-submit');

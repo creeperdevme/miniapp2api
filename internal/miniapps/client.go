@@ -26,9 +26,16 @@ const (
 	pollInterval    = 500 * time.Millisecond
 	maxResponseSize = 16 << 20
 	graceBeforeDone = 3 * time.Second
+
+	// statusCSRFExpired 是上游 CSRF 配對失效時回傳的狀態碼。
+	statusCSRFExpired = 419
+	// csrfCookieName 是上游存放 CSRF 值的 Cookie 名稱。
+	csrfCookieName = "__Host-miniapps.x-csrf-token"
 )
 
 // Credentials 是一次中轉所需的登入資訊。
+//
+// CSRFCookie 與 CSRFToken 為選填，留空時會自動向 /auth/csrf 取得一組新的配對。
 type Credentials struct {
 	JWT        string
 	CSRFCookie string
@@ -37,6 +44,34 @@ type Credentials struct {
 	ModelID    string
 	Revision   int
 	Language   string
+
+	// CSRFCache 可讓同一帳號的多個用戶端共用自動取得的 CSRF 配對。
+	CSRFCache *CSRFCache
+}
+
+// CSRFCache 是自動取得的 CSRF 配對快取。
+type CSRFCache struct {
+	mu     sync.Mutex
+	cookie string
+	token  string
+}
+
+// Get 回傳快取的 CSRF 配對。
+func (c *CSRFCache) Get() (string, string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cookie == "" || c.token == "" {
+		return "", "", false
+	}
+	return c.cookie, c.token, true
+}
+
+// Set 更新快取的 CSRF 配對。
+func (c *CSRFCache) Set(cookie, token string) {
+	c.mu.Lock()
+	c.cookie = cookie
+	c.token = token
+	c.mu.Unlock()
 }
 
 // Validate 檢查必填欄位。
@@ -44,10 +79,6 @@ func (c Credentials) Validate() error {
 	switch {
 	case strings.TrimSpace(c.JWT) == "":
 		return errors.New("缺少 JWT")
-	case strings.TrimSpace(c.CSRFCookie) == "":
-		return errors.New("缺少 CSRF_Cookie")
-	case strings.TrimSpace(c.CSRFToken) == "":
-		return errors.New("缺少 CSRF_Token")
 	case strings.TrimSpace(c.ToolID) == "":
 		return errors.New("缺少 toolId")
 	case strings.TrimSpace(c.ModelID) == "":
@@ -149,6 +180,7 @@ type Client struct {
 	creds   Credentials
 	baseURL string
 	http    *http.Client
+	csrf    *CSRFCache
 
 	mu             sync.Mutex
 	conversationID string
@@ -162,9 +194,14 @@ func New(creds Credentials) *Client {
 	if strings.TrimSpace(creds.Language) == "" {
 		creds.Language = "zh"
 	}
+	csrf := creds.CSRFCache
+	if csrf == nil {
+		csrf = &CSRFCache{}
+	}
 	return &Client{
 		creds:   creds,
 		baseURL: APIBase,
+		csrf:    csrf,
 		http: &http.Client{
 			Timeout: 0,
 			Transport: &http.Transport{
@@ -440,16 +477,35 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		target += "?" + query.Encode()
 	}
 
-	var body io.Reader
+	var data []byte
 	if payload != nil {
-		data, err := json.Marshal(payload)
+		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return nil, 0, err
 		}
-		body = bytes.NewReader(data)
+		data = encoded
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	// POST 會帶上 CSRF 配對，若配對已失效（419）就重取一組再試一次。
+	for attempt := 0; ; attempt++ {
+		body, status, err := c.doOnce(ctx, method, target, data, attempt > 0)
+		if err != nil {
+			return nil, 0, err
+		}
+		if status == statusCSRFExpired && attempt == 0 {
+			continue
+		}
+		return body, status, nil
+	}
+}
+
+func (c *Client) doOnce(ctx context.Context, method, target string, data []byte, refreshCSRF bool) ([]byte, int, error) {
+	var reader io.Reader
+	if data != nil {
+		reader = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -457,12 +513,20 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	req.Header.Set("Origin", "https://miniapps.ai")
 	req.Header.Set("Referer", "https://miniapps.ai/")
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Cookie", c.cookieHeader())
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
+
+	cookie := "jwt=" + c.creds.JWT
 	if method == http.MethodPost {
-		req.Header.Set("x-csrf-token", c.creds.CSRFToken)
+		csrfCookie, csrfToken, err := c.csrfPair(ctx, refreshCSRF)
+		if err != nil {
+			return nil, 0, err
+		}
+		cookie += "; " + csrfCookieName + "=" + csrfCookie
+		req.Header.Set("x-csrf-token", csrfToken)
+	}
+	req.Header.Set("Cookie", cookie)
+
+	if data != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	resp, err := c.http.Do(req)
@@ -471,15 +535,87 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
-	return data, resp.StatusCode, nil
+	return body, resp.StatusCode, nil
 }
 
-func (c *Client) cookieHeader() string {
-	return fmt.Sprintf("jwt=%s; __Host-miniapps.x-csrf-token=%s", c.creds.JWT, c.creds.CSRFCookie)
+// csrfPair 回傳這次請求要用的 CSRF 配對（Cookie 值與 x-csrf-token 值）。
+//
+// 帳號有填寫 CSRF 時以填寫的值為優先，其次是已快取的配對，
+// 兩者都沒有（或 refresh 為 true）時才向 /auth/csrf 重新取得。
+func (c *Client) csrfPair(ctx context.Context, refresh bool) (string, string, error) {
+	if !refresh {
+		manualCookie := strings.TrimSpace(c.creds.CSRFCookie)
+		manualToken := strings.TrimSpace(c.creds.CSRFToken)
+		if manualCookie != "" && manualToken != "" {
+			return manualCookie, manualToken, nil
+		}
+		if cookie, token, ok := c.csrf.Get(); ok {
+			return cookie, token, nil
+		}
+	}
+
+	cookie, token, err := c.FetchCSRF(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	c.csrf.Set(cookie, token)
+	return cookie, token, nil
+}
+
+// FetchCSRF 向 /auth/csrf 取得一組新的 CSRF 配對。
+//
+// 上游會同時在回應主體回傳 csrfToken，並用 Set-Cookie 換發新的
+// __Host-miniapps.x-csrf-token，兩者必須成對使用。
+func (c *Client) FetchCSRF(ctx context.Context) (string, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/auth/csrf", nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://miniapps.ai")
+	req.Header.Set("Referer", "https://miniapps.ai/")
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Cookie", "jwt="+c.creds.JWT)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", &Error{Op: "GET /auth/csrf", Err: err}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	if err != nil {
+		return "", "", &Error{Op: "GET /auth/csrf", Status: resp.StatusCode, Err: err}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", &Error{Op: "GET /auth/csrf", Status: resp.StatusCode, Body: truncate(string(body), 300)}
+	}
+
+	var payload struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", "", &Error{Op: "GET /auth/csrf", Status: resp.StatusCode, Body: "無法解析回應：" + truncate(string(body), 300)}
+	}
+	token := strings.TrimSpace(payload.CSRFToken)
+	if token == "" {
+		return "", "", &Error{Op: "GET /auth/csrf", Status: resp.StatusCode, Body: "回應中找不到 csrfToken"}
+	}
+
+	cookie := ""
+	for _, item := range resp.Cookies() {
+		if item.Name == csrfCookieName {
+			cookie = item.Value
+		}
+	}
+	if cookie == "" {
+		return "", "", &Error{Op: "GET /auth/csrf", Status: resp.StatusCode, Body: "回應中找不到 " + csrfCookieName + " Cookie"}
+	}
+	return cookie, token, nil
 }
 
 // Summary 是對話清單中的單筆資料。

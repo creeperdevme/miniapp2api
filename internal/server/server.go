@@ -37,6 +37,10 @@ type Server struct {
 	sess    *sessionStore
 	catalog *catalogCache
 	mux     *http.ServeMux
+
+	// csrfCache 讓同一個帳號的所有請求共用一組自動取得的 CSRF 配對。
+	csrfMu    sync.Mutex
+	csrfCache map[string]*miniapps.CSRFCache
 }
 
 // New 建立伺服器並註冊所有路由。
@@ -45,12 +49,13 @@ func New(cfg *config.Config, pool *store.Store, logger *log.Logger) *Server {
 		logger = log.Default()
 	}
 	s := &Server{
-		cfg:     cfg,
-		pool:    pool,
-		log:     logger,
-		sess:    newSessionStore(sessionTTL),
-		catalog: newCatalogCache(),
-		mux:     http.NewServeMux(),
+		cfg:       cfg,
+		pool:      pool,
+		log:       logger,
+		sess:      newSessionStore(sessionTTL),
+		catalog:   newCatalogCache(),
+		mux:       http.NewServeMux(),
+		csrfCache: map[string]*miniapps.CSRFCache{},
 	}
 	s.routes()
 	return s
@@ -58,6 +63,25 @@ func New(cfg *config.Config, pool *store.Store, logger *log.Logger) *Server {
 
 // Handler 回傳 HTTP 處理器。
 func (s *Server) Handler() http.Handler { return s.mux }
+
+// csrfCacheFor 取得帳號專用的 CSRF 快取，沒有就建立一個。
+func (s *Server) csrfCacheFor(accountID string) *miniapps.CSRFCache {
+	s.csrfMu.Lock()
+	defer s.csrfMu.Unlock()
+	cache, ok := s.csrfCache[accountID]
+	if !ok {
+		cache = &miniapps.CSRFCache{}
+		s.csrfCache[accountID] = cache
+	}
+	return cache
+}
+
+// forgetCSRF 丟掉帳號的 CSRF 快取（JWT 變更或帳號刪除時呼叫）。
+func (s *Server) forgetCSRF(accountID string) {
+	s.csrfMu.Lock()
+	delete(s.csrfCache, accountID)
+	s.csrfMu.Unlock()
+}
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/session", s.handleSession)
@@ -455,7 +479,7 @@ func (s *Server) catalogAccount() (store.Account, bool) {
 		if !account.Enabled || account.CoolingDown() {
 			continue
 		}
-		if account.JWT == "" || account.CSRFCookie == "" {
+		if account.JWT == "" {
 			continue
 		}
 		return account, true
@@ -587,6 +611,8 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		if payload.JWT != nil && strings.TrimSpace(*payload.JWT) != "" {
 			acc.JWT = strings.TrimSpace(*payload.JWT)
+			// JWT 換了，舊的 CSRF 配對也跟著失效。
+			s.forgetCSRF(id)
 		}
 		if payload.CSRFCookie != nil && strings.TrimSpace(*payload.CSRFCookie) != "" {
 			acc.CSRFCookie = strings.TrimSpace(*payload.CSRFCookie)
@@ -626,6 +652,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Printf("已刪除帳號 %s", id)
+	s.forgetCSRF(id)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -637,13 +664,13 @@ func (s *Server) handleCheckAccount(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": store.ErrNotFound.Error()})
 		return
 	}
-	if account.JWT == "" || account.CSRFCookie == "" || account.CSRFToken == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "此帳號缺少 JWT 或 CSRF 資訊"})
+	if account.JWT == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "此帳號缺少 JWT"})
 		return
 	}
 
 	model := s.cfg.FindModel("")
-	client := miniapps.New(credentialsFor(account, model))
+	client := miniapps.New(s.credentialsFor(account, model))
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
@@ -716,7 +743,7 @@ func contentTypeOf(path string) string {
 // 共用工具
 // ---------------------------------------------------------------------------
 
-func credentialsFor(account store.Account, model config.Model) miniapps.Credentials {
+func (s *Server) credentialsFor(account store.Account, model config.Model) miniapps.Credentials {
 	return miniapps.Credentials{
 		JWT:        account.JWT,
 		CSRFCookie: account.CSRFCookie,
@@ -725,6 +752,7 @@ func credentialsFor(account store.Account, model config.Model) miniapps.Credenti
 		ModelID:    model.ModelID,
 		Revision:   model.Revision,
 		Language:   model.Language,
+		CSRFCache:  s.csrfCacheFor(account.ID),
 	}
 }
 

@@ -158,11 +158,9 @@ func TestCreateValidatesFields(t *testing.T) {
 	if _, err := pool.Create(Account{CSRFCookie: "c", CSRFToken: "t"}); err == nil {
 		t.Fatal("缺少 JWT 應該要失敗")
 	}
-	if _, err := pool.Create(Account{JWT: "jwt", CSRFToken: "t"}); err == nil {
-		t.Fatal("缺少 CSRF_Cookie 應該要失敗")
-	}
-	if _, err := pool.Create(Account{JWT: "jwt", CSRFCookie: "c"}); err == nil {
-		t.Fatal("缺少 CSRF_Token 應該要失敗")
+	// CSRF 是選填的，留空時中轉會自己向 /auth/csrf 取得。
+	if _, err := pool.Create(Account{JWT: "jwt"}); err != nil {
+		t.Fatalf("只填 JWT 應該要成功，得到 %v", err)
 	}
 }
 

@@ -45,11 +45,13 @@ type Stats struct {
 	Failed   int64 `json:"failed"`
 }
 
-// Account 是單一帳號（一組 JWT / CSRF）的設定。
+// Account 是單一帳號的設定。
 type Account struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	JWT        string `json:"jwt"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	JWT  string `json:"jwt"`
+
+	// CSRFCookie 與 CSRFToken 為選填；留空時中轉會自動向 /auth/csrf 取得。
 	CSRFCookie string `json:"csrf_cookie"`
 	CSRFToken  string `json:"csrf_token"`
 	Enabled    bool   `json:"enabled"`
@@ -382,12 +384,6 @@ func (s *Store) Count() int {
 func (s *Store) Create(acc Account) (Account, error) {
 	if strings.TrimSpace(acc.JWT) == "" {
 		return Account{}, errors.New("JWT 不可為空")
-	}
-	if strings.TrimSpace(acc.CSRFCookie) == "" {
-		return Account{}, errors.New("CSRF_Cookie 不可為空")
-	}
-	if strings.TrimSpace(acc.CSRFToken) == "" {
-		return Account{}, errors.New("CSRF_Token 不可為空")
 	}
 
 	now := time.Now().Format(time.RFC3339)
