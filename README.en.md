@@ -15,6 +15,7 @@ Pure Go, no third-party dependencies, and a single self-contained binary (Window
   - [Windows](#windows)
   - [Linux](#linux)
   - [Build from source](#build-from-source)
+  - [Auto build](#auto-build)
 - [First run](#first-run)
 - [Adding accounts](#adding-accounts)
 - [Calling the OpenAI API](#calling-the-openai-api)
@@ -183,6 +184,14 @@ Cross-compiling needs no extra toolchain:
 GOOS=windows GOARCH=amd64 go build -o miniapp2api.exe .
 GOOS=linux   GOARCH=arm64 go build -o miniapp2api-linux-arm64 .
 ```
+
+### Auto build
+
+`build/build-windows.bat` Windows builder
+
+`build/build-linux.bat` Linux environment builder
+
+`bin/` Build result
 
 ### Command-line flags
 
