@@ -2,6 +2,7 @@ package miniapps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -205,5 +206,82 @@ func TestSendRefreshesExpiredCSRF(t *testing.T) {
 		if chatTokens[i] != want[i] {
 			t.Fatalf("第 %d 次送出的 x-csrf-token 應為 %q，得到 %q", i+1, want[i], chatTokens[i])
 		}
+	}
+}
+
+func TestLoginFetchesNewJWT(t *testing.T) {
+	var verifiedCookie string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/csrf":
+			http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: "csrf-cookie", Path: "/"})
+			_, _ = w.Write([]byte(`{"csrfToken":"csrf-token"}`))
+		case "/auth/login":
+			if got := r.Header.Get("x-csrf-token"); got != "csrf-token" {
+				t.Errorf("登入應該帶上 CSRF 標頭，得到 %q", got)
+			}
+			if cookie := r.Header.Get("Cookie"); strings.Contains(cookie, "jwt=") {
+				t.Errorf("登入不該帶上舊的 jwt，得到 %q", cookie)
+			}
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("無法解析登入內容：%v", err)
+			}
+			if payload["email"] != "a@b.c" || payload["password"] != "pw" {
+				t.Errorf("登入內容錯誤：%v", payload)
+			}
+			http.SetCookie(w, &http.Cookie{Name: "jwt", Value: "new-jwt", Path: "/"})
+			_, _ = w.Write([]byte(`{"user":{"id":"u1"}}`))
+		case "/auth/me":
+			verifiedCookie = r.Header.Get("Cookie")
+			_, _ = w.Write([]byte(`{"user":{"id":"u1"}}`))
+		default:
+			t.Errorf("非預期的請求路徑：%s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := New(Credentials{JWT: "old-jwt"})
+	client.baseURL = server.URL
+
+	token, err := client.Login(context.Background(), "a@b.c", "pw")
+	if err != nil {
+		t.Fatalf("Login 失敗：%v", err)
+	}
+	if token != "new-jwt" {
+		t.Fatalf("應該回傳新的 JWT，得到 %q", token)
+	}
+	if !strings.Contains(verifiedCookie, "jwt=new-jwt") {
+		t.Fatalf("應該用新憑證驗證一次，得到 %q", verifiedCookie)
+	}
+	if client.Credentials().JWT != "new-jwt" {
+		t.Fatal("用戶端應該改用新的 JWT")
+	}
+}
+
+func TestLoginRejectsBadCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/csrf" {
+			http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: "csrf-cookie", Path: "/"})
+			_, _ = w.Write([]byte(`{"csrfToken":"csrf-token"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"statusCode":404,"message":"Password is incorrect"}`))
+	}))
+	defer server.Close()
+
+	client := New(Credentials{JWT: "old-jwt"})
+	client.baseURL = server.URL
+
+	_, err := client.Login(context.Background(), "a@b.c", "wrong")
+	if err == nil {
+		t.Fatal("密碼錯誤應該要失敗")
+	}
+	if !strings.Contains(err.Error(), "Password is incorrect") {
+		t.Fatalf("錯誤訊息應該帶上上游說明，得到 %v", err)
+	}
+	if client.Credentials().JWT != "old-jwt" {
+		t.Fatal("登入失敗時不該動到原本的 JWT")
 	}
 }

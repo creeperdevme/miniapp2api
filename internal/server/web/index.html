@@ -366,6 +366,9 @@ details[open] summary::before { transform: rotate(90deg); }
     <label for="acct-jwt">JWT</label>
     <textarea id="acct-jwt" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." required></textarea>
 
+    <label for="acct-password">密碼（選填）</label>
+    <input id="acct-password" type="password" placeholder="填寫後 JWT 快到期時會自動重新登入續期">
+
     <div class="modal-actions">
       <button class="btn" type="button" data-close="modal-account">取消</button>
       <button class="btn btn-primary" type="submit" id="account-submit">儲存</button>

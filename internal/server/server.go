@@ -27,6 +27,8 @@ const (
 	sessionCookie = "m2a_session"
 	sessionTTL    = 24 * time.Hour
 	maxBodySize   = 32 << 20
+	// renewWindow 是 JWT 剩餘時間低於此值時就自動重新登入續期。
+	renewWindow = 3 * 24 * time.Hour
 )
 
 // Server 是 miniapp2api 的 HTTP 伺服器。
@@ -94,6 +96,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/accounts/{id}", s.auth(s.handleUpdateAccount))
 	s.mux.HandleFunc("DELETE /api/accounts/{id}", s.auth(s.handleDeleteAccount))
 	s.mux.HandleFunc("POST /api/accounts/{id}/check", s.auth(s.handleCheckAccount))
+	s.mux.HandleFunc("POST /api/accounts/{id}/renew", s.auth(s.handleRenewAccount))
 	s.mux.HandleFunc("PUT /api/settings", s.auth(s.handleUpdateSettings))
 	s.mux.HandleFunc("GET /api/models/catalog", s.auth(s.handleModelCatalog))
 	s.mux.HandleFunc("POST /api/models", s.auth(s.handleCreateModel))
@@ -557,6 +560,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 type accountPayload struct {
 	Name       string `json:"name"`
 	JWT        string `json:"jwt"`
+	Password   string `json:"password"`
 	CSRFCookie string `json:"csrf_cookie"`
 	CSRFToken  string `json:"csrf_token"`
 	Enabled    *bool  `json:"enabled"`
@@ -577,6 +581,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	account, err := s.pool.Create(store.Account{
 		Name:       payload.Name,
 		JWT:        payload.JWT,
+		Password:   payload.Password,
 		CSRFCookie: payload.CSRFCookie,
 		CSRFToken:  payload.CSRFToken,
 		Enabled:    enabled,
@@ -596,6 +601,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Name       *string `json:"name"`
 		JWT        *string `json:"jwt"`
+		Password   *string `json:"password"`
 		CSRFCookie *string `json:"csrf_cookie"`
 		CSRFToken  *string `json:"csrf_token"`
 		Enabled    *bool   `json:"enabled"`
@@ -613,6 +619,9 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			acc.JWT = strings.TrimSpace(*payload.JWT)
 			// JWT 換了，舊的 CSRF 配對也跟著失效。
 			s.forgetCSRF(id)
+		}
+		if payload.Password != nil && strings.TrimSpace(*payload.Password) != "" {
+			acc.Password = strings.TrimSpace(*payload.Password)
 		}
 		if payload.CSRFCookie != nil && strings.TrimSpace(*payload.CSRFCookie) != "" {
 			acc.CSRFCookie = strings.TrimSpace(*payload.CSRFCookie)
@@ -685,6 +694,57 @@ func (s *Server) handleCheckAccount(w http.ResponseWriter, r *http.Request) {
 		"ok":            true,
 		"conversations": len(summaries),
 	})
+}
+
+// renewAccount 用帳號密碼重新登入換一組新的 JWT，並寫回號池。
+//
+// 上游的 JWT 有效期固定（約 15 天），沒有換發或延長機制，
+// 因此帳號若填了密碼，就能在到期前自動換一組新的。
+func (s *Server) renewAccount(ctx context.Context, account store.Account) (store.Account, error) {
+	if !account.AutoRenewable() {
+		return account, errors.New("此帳號沒有設定密碼，無法自動續期")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	client := miniapps.New(miniapps.Credentials{
+		JWT:       account.JWT,
+		CSRFCache: s.csrfCacheFor(account.ID),
+	})
+	token, err := client.Login(ctx, account.Email, account.Password)
+	if err != nil {
+		return account, err
+	}
+
+	renewed, err := s.pool.Modify(account.ID, func(acc *store.Account) error {
+		acc.JWT = token
+		acc.LastError = ""
+		acc.CooldownUntil = time.Time{}
+		return nil
+	})
+	if err != nil {
+		return account, err
+	}
+	s.log.Printf("帳號 %s 已重新登入續期（JWT 到期 %s）", renewed.DisplayName(), renewed.ExpiresAt)
+	return renewed, nil
+}
+
+func (s *Server) handleRenewAccount(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	account, ok := s.pool.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": store.ErrNotFound.Error()})
+		return
+	}
+
+	renewed, err := s.renewAccount(r.Context(), account)
+	if err != nil {
+		s.pool.SetError(id, err.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, renewed.View())
 }
 
 // ---------------------------------------------------------------------------

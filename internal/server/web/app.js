@@ -171,6 +171,9 @@ function accountBadges(account) {
     if (left < 0) badges.push('<span class="badge err">JWT 已過期</span>');
     else if (left <= 3) badges.push(`<span class="badge warn">JWT 剩 ${left} 天</span>`);
   }
+  if (account.password) {
+    badges.push('<span class="badge ok" title="已設定密碼，JWT 快到期時會自動重新登入">自動續期</span>');
+  }
   return badges.join(' ');
 }
 
@@ -204,6 +207,7 @@ function renderAccounts() {
         ${errLine}
         <div class="acct-actions">
           <button class="btn btn-sm" data-action="check" data-id="${esc(account.id)}">測試</button>
+          ${account.password ? `<button class="btn btn-sm" data-action="renew" data-id="${esc(account.id)}">續期</button>` : ''}
           <button class="btn btn-sm" data-action="edit" data-id="${esc(account.id)}">編輯</button>
           <button class="btn btn-sm" data-action="toggle" data-id="${esc(account.id)}">${account.enabled ? '停用' : '啟用'}</button>
           <button class="btn btn-sm btn-danger" data-action="delete" data-id="${esc(account.id)}">刪除</button>
@@ -238,6 +242,22 @@ $('accounts').addEventListener('click', async (event) => {
 
   if (button.dataset.action === 'edit') { openAccountModal(account); return; }
 
+  if (button.dataset.action === 'renew') {
+    button.disabled = true;
+    button.textContent = '續期中…';
+    try {
+      const updated = await api(`/api/accounts/${id}/renew`, { method: 'POST' });
+      toast(`已重新登入，JWT 到期 ${fmtTime(updated.expires_at)}`, 'ok');
+    } catch (err) {
+      toast('續期失敗：' + err.message, 'err');
+    } finally {
+      button.disabled = false;
+      button.textContent = '續期';
+      refreshAccounts().catch(() => {});
+    }
+    return;
+  }
+
   if (button.dataset.action === 'toggle') {
     try {
       await api(`/api/accounts/${id}`, { method: 'PUT', body: { enabled: !account.enabled } });
@@ -263,10 +283,11 @@ function openAccountModal(account) {
   const editing = !!account;
   $('account-title').textContent = editing ? '編輯帳號' : '新增帳號';
   $('account-hint').textContent = editing
-    ? 'JWT 留空表示不變更，填寫則會覆蓋原本的值。'
-    : '貼上瀏覽器登入 miniapps.ai 後的 JWT，會存成 auths/{email}.json；CSRF 由中轉自動取得。';
+    ? 'JWT 與密碼留空表示不變更，填寫則會覆蓋原本的值。'
+    : '貼上瀏覽器登入 miniapps.ai 後的 JWT，會存成 auths/{email}.json；CSRF 由中轉自動取得，填了密碼就能在到期前自動換新。';
   $('acct-name').value = editing ? account.name || '' : '';
   $('acct-jwt').value = '';
+  $('acct-password').value = '';
   $('acct-jwt').required = !editing;
   $('modal-account').classList.remove('hidden');
   $('acct-name').focus();
@@ -277,6 +298,7 @@ $('account-form').addEventListener('submit', async (event) => {
   const payload = {
     name: $('acct-name').value.trim(),
     jwt: $('acct-jwt').value.trim(),
+    password: $('acct-password').value,
   };
 
   const button = $('account-submit');

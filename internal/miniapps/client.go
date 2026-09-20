@@ -566,6 +566,106 @@ func (c *Client) csrfPair(ctx context.Context, refresh bool) (string, string, er
 	return cookie, token, nil
 }
 
+// Login 用帳號密碼換一組新的 JWT，並先用新憑證驗證一次再回傳。
+func (c *Client) Login(ctx context.Context, email, password string) (string, error) {
+	if strings.TrimSpace(email) == "" || password == "" {
+		return "", errors.New("缺少登入用的信箱或密碼")
+	}
+
+	data, err := json.Marshal(map[string]string{"email": email, "password": password})
+	if err != nil {
+		return "", err
+	}
+
+	csrfCookie, csrfToken, err := c.csrfPair(ctx, false)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/auth/login", bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://miniapps.ai")
+	req.Header.Set("Referer", "https://miniapps.ai/")
+	req.Header.Set("User-Agent", userAgent)
+	// 登入時不帶舊的 jwt，免得過期的憑證影響上游判斷。
+	req.Header.Set("Cookie", csrfCookieName+"="+csrfCookie)
+	req.Header.Set("x-csrf-token", csrfToken)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", &Error{Op: "POST /auth/login", Err: err}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	if err != nil {
+		return "", &Error{Op: "POST /auth/login", Status: resp.StatusCode, Err: err}
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", &Error{Op: "POST /auth/login", Status: resp.StatusCode, Body: truncate(string(body), 300)}
+	}
+
+	token := ""
+	for _, item := range resp.Cookies() {
+		if item.Name == "jwt" {
+			token = item.Value
+		}
+	}
+	if token == "" {
+		var payload struct {
+			JWT         string `json:"jwt"`
+			Token       string `json:"token"`
+			AccessToken string `json:"accessToken"`
+		}
+		if err := json.Unmarshal(body, &payload); err == nil {
+			for _, candidate := range []string{payload.JWT, payload.Token, payload.AccessToken} {
+				if strings.TrimSpace(candidate) != "" {
+					token = strings.TrimSpace(candidate)
+					break
+				}
+			}
+		}
+	}
+	if token == "" {
+		return "", &Error{Op: "POST /auth/login", Status: resp.StatusCode, Body: "回應中找不到 jwt：" + truncate(string(body), 200)}
+	}
+
+	if err := c.verifyToken(ctx, token); err != nil {
+		return "", err
+	}
+	c.creds.JWT = token
+	return token, nil
+}
+
+// verifyToken 用指定的 JWT 呼叫 /auth/me，確認這組憑證真的能用。
+func (c *Client) verifyToken(ctx context.Context, token string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/auth/me", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://miniapps.ai")
+	req.Header.Set("Referer", "https://miniapps.ai/")
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Cookie", "jwt="+token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return &Error{Op: "GET /auth/me", Err: err}
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode != http.StatusOK {
+		return &Error{Op: "GET /auth/me（新憑證驗證失敗）", Status: resp.StatusCode, Body: truncate(string(body), 300)}
+	}
+	return nil
+}
+
 // FetchCSRF 向 /auth/csrf 取得一組新的 CSRF 配對。
 //
 // 上游會同時在回應主體回傳 csrfToken，並用 Set-Cookie 換發新的

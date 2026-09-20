@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testJWT(t *testing.T) string {
@@ -161,6 +162,42 @@ func TestCreateValidatesFields(t *testing.T) {
 	// CSRF 是選填的，留空時中轉會自己向 /auth/csrf 取得。
 	if _, err := pool.Create(Account{JWT: "jwt"}); err != nil {
 		t.Fatalf("只填 JWT 應該要成功，得到 %v", err)
+	}
+}
+
+func TestAccountRenewalHelpers(t *testing.T) {
+	soon := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	far := time.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339)
+	window := 3 * 24 * time.Hour
+
+	if !(Account{ExpiresAt: soon}).ExpiringWithin(window) {
+		t.Fatal("剩一天應該算即將到期")
+	}
+	if (Account{ExpiresAt: far}).ExpiringWithin(window) {
+		t.Fatal("剩 30 天不該算即將到期")
+	}
+	if (Account{}).ExpiringWithin(window) {
+		t.Fatal("沒有到期時間時不該算即將到期")
+	}
+	if (Account{ExpiresAt: soon}).Expired() {
+		t.Fatal("還沒到期不該算過期")
+	}
+
+	if (Account{Email: "a@b.c"}).AutoRenewable() {
+		t.Fatal("沒有密碼時不該能自動續期")
+	}
+	if (Account{Password: "pw"}).AutoRenewable() {
+		t.Fatal("沒有信箱時不該能自動續期")
+	}
+	if !(Account{Email: "a@b.c", Password: "pw"}).AutoRenewable() {
+		t.Fatal("有信箱與密碼時應該能自動續期")
+	}
+}
+
+func TestRedactedHidesPassword(t *testing.T) {
+	account := Account{JWT: "abcdefghijklmnop", Password: "super-secret-password"}
+	if view := account.View(); view.Password == account.Password || view.Password == "" {
+		t.Fatalf("密碼應該被遮蔽，得到 %q", view.Password)
 	}
 }
 

@@ -259,6 +259,15 @@ func (s *Server) complete(ctx context.Context, model config.Model, prompt string
 		}
 		excluded[account.ID] = true
 
+		// JWT 快到期時先用帳密換一組新的，免得送到一半失效。
+		if account.AutoRenewable() && account.ExpiringWithin(renewWindow) {
+			if renewed, err := s.renewAccount(ctx, account); err == nil {
+				account = renewed
+			} else {
+				s.log.Printf("帳號 %s 自動續期失敗：%v", account.DisplayName(), err)
+			}
+		}
+
 		client := miniapps.New(s.credentialsFor(account, model))
 		answer, conversationID, err := client.Ask(ctx, prompt, s.cfg.Timeout())
 		s.pool.Record(account.ID, err, cooldownFor(err))

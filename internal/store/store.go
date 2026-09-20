@@ -51,6 +51,10 @@ type Account struct {
 	Name string `json:"name"`
 	JWT  string `json:"jwt"`
 
+	// Password 是選填的登入密碼；填寫後 JWT 快到期時會自動重新登入續期。
+	// 留白時帳號的 JWT 過期就只能手動重新貼上。
+	Password string `json:"password,omitempty"`
+
 	// CSRFCookie 與 CSRFToken 為選填；留空時中轉會自動向 /auth/csrf 取得。
 	CSRFCookie string `json:"csrf_cookie"`
 	CSRFToken  string `json:"csrf_token"`
@@ -150,6 +154,20 @@ func (a Account) Expired() bool {
 	return time.Now().After(exp)
 }
 
+// ExpiringWithin 回報 JWT 是否會在指定的時間內到期（已過期也算）。
+func (a Account) ExpiringWithin(d time.Duration) bool {
+	exp, err := time.Parse(time.RFC3339, a.ExpiresAt)
+	if err != nil {
+		return false
+	}
+	return time.Now().Add(d).After(exp)
+}
+
+// AutoRenewable 回報這個帳號是否能用帳密自動續期。
+func (a Account) AutoRenewable() bool {
+	return strings.TrimSpace(a.Password) != "" && strings.TrimSpace(a.Email) != ""
+}
+
 // CoolingDown 回報帳號是否在錯誤冷卻中。
 func (a Account) CoolingDown() bool {
 	return !a.CooldownUntil.IsZero() && time.Now().Before(a.CooldownUntil)
@@ -192,6 +210,7 @@ func (a Account) Redacted() Account {
 	a.JWT = mask(a.JWT)
 	a.CSRFCookie = mask(a.CSRFCookie)
 	a.CSRFToken = mask(a.CSRFToken)
+	a.Password = mask(a.Password)
 	return a
 }
 
